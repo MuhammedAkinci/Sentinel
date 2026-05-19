@@ -103,7 +103,28 @@ npm install                  # install workspace dependencies
 npm run contracts:build      # forge build
 npm run contracts:test       # forge test -vvv
 npm run typecheck            # tsc -p across all packages
+npm test                     # vitest across off-chain packages
 ```
+
+### Deploying
+
+Configure `.env` (see `.env.example`) and broadcast the deploy script
+against the target network. The script prints both a human-readable
+summary and an env-paste-ready block; pipe the latter into `.env.local`
+to seed the agent runtimes with the deployed addresses:
+
+```bash
+forge script script/Deploy.s.sol \
+  --root contracts \
+  --rpc-url $SOMNIA_RPC_HTTP \
+  --broadcast \
+  --slow \
+  | tee deployments/last-run.log \
+  | grep -E "^SENTINEL_" >> .env.local
+```
+
+A canonical `deployments/<chain>.json` is also written by the script
+for later programmatic consumption.
 
 ---
 
@@ -197,10 +218,17 @@ npm run typecheck            # tsc -p across all packages
     reverts (typically another Executor already settled the case) are
     logged and skipped without halting the loop. Past-but-unsettled
     Routed events are replayed on startup.
+  - `prompts/` — deterministic Scorer and Router prompt builders that
+    implement `docs/agents.md` verbatim, plus a `contextLoader`
+    that pulls reserve config, balances, prices, symbols, and the
+    on-chain health factor through viem reads to populate the
+    builders' input snapshot. Useful for shadow validation today
+    and as the reference implementation once Somnia opens custom
+    agent registration.
   - Both processes share `@sentinel/shared` for chain configuration,
     deployment addresses, and zod-validated env loading. Strict
     TypeScript end to end; no `any` in application code.
-- **108 tests passing in total**:
+- **118 tests passing in total**:
   - 94 Foundry tests (LendingPool 27, AgentRegistry 16, Reputation 8,
     Splitter 13, Coordinator 18, AutoProtectionVault 9, Deploy 3).
     The Coordinator suite covers the full end-to-end flow including
@@ -208,8 +236,8 @@ npm run typecheck            # tsc -p across all packages
     with selector and agent-ID prefix matching, no mock contract
     deployed) and validator callbacks (delivered via
     `vm.prank(somniaPlatform)`).
-  - 14 Vitest tests for the agent runtime
-    (PositionTracker 9, HealthMonitor 5).
+  - 24 Vitest tests for the agent runtime
+    (PositionTracker 9, HealthMonitor 5, ScorerPrompt 5, RouterPrompt 5).
 
 ## Agent specifications
 

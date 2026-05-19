@@ -283,5 +283,24 @@ contract Deploy is Script {
         console2.log("Splitter        ", d.splitter);
         console2.log("Coordinator     ", d.coordinator);
         console2.log("AutoProtectVault", d.vault);
+
+        // Env-paste-ready block. Pipe these lines into `.env.local`:
+        //   forge script ... | grep -E "^(SENTINEL|SENTINEL_DEMO)_" >> .env.local
+        console2.log("--- env ---");
+        console2.log(string.concat("SENTINEL_WETH=", _toHex(d.weth)));
+        console2.log(string.concat("SENTINEL_USDC=", _toHex(d.usdc)));
+        console2.log(string.concat("SENTINEL_PRICE_ORACLE_ADAPTER=", _toHex(d.oracle)));
+        console2.log(string.concat("SENTINEL_LENDING_POOL=", _toHex(d.pool)));
+        console2.log(string.concat("SENTINEL_S_WETH=", _toHex(d.sWeth)));
+        console2.log(string.concat("SENTINEL_S_USDC=", _toHex(d.sUsdc)));
+        console2.log(string.concat("SENTINEL_AGENT_REGISTRY=", _toHex(d.registry)));
+        console2.log(string.concat("SENTINEL_REPUTATION=", _toHex(d.reputation)));
+        console2.log(string.concat("SENTINEL_SPLITTER=", _toHex(d.splitter)));
+        console2.log(string.concat("SENTINEL_COORDINATOR=", _toHex(d.coordinator)));
+        console2.log(string.concat("SENTINEL_AUTO_PROTECTION_VAULT=", _toHex(d.vault)));
+    }
+
+    function _toHex(address a) private pure returns (string memory) {
+        return vm.toString(a);
     }
 }
