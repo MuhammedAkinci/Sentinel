@@ -1,0 +1,33 @@
+# Node
+node_modules/
+.npm/
+*.log
+npm-debug.log*
+.eslintcache
+.tsbuildinfo
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# OS
+Thumbs.db

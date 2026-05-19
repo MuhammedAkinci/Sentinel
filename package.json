@@ -1,0 +1,25 @@
+{
+  "name": "sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous liquidation and risk network on Somnia",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "contracts:build": "forge build --root contracts",
+    "contracts:test": "forge test --root contracts -vvv",
+    "contracts:fmt": "forge fmt --root contracts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
