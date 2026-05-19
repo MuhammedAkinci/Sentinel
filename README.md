@@ -148,24 +148,48 @@ npm run typecheck            # tsc -p across all packages
     Static debt mapping per (user, asset). Per-reserve LT, liquidation bonus,
     and close factor. Multi-decimal-aware USD math. Full liquidation logic
     with capping when collateral is insufficient.
-  - 27 Foundry tests passing: deposit / withdraw / borrow / repay /
-    liquidation happy paths, health-factor math across mixed decimals, every
-    documented revert path, oracle override lock, close-factor enforcement.
+- **Sentinel layer:**
+  - `AgentRegistry` — permissionless agent registration. Each registration
+    mints an incrementing ID and records operator, role (Watcher / Scorer /
+    Router / Executor), metadata URI, and active status. Only the operator
+    that registered an agent may modify or deactivate it.
+  - `Reputation` — Coordinator-gated success / failure counters that
+    accumulate a clamped-at-zero score. Owner sets the reward / penalty
+    constants and rotates the Coordinator address.
+  - `Splitter` — pull-payment 60 / 30 / 10 distribution across agents
+    (reputation-weighted, equal-split fallback when no scores exist),
+    treasury, and a held bounty pool. Asset-agnostic — tracks owed
+    balances per (token, account).
+  - `Coordinator` — on-chain orchestrator. Watcher flags a position;
+    Coordinator submits two real `ISomniaAgents.createRequest` calls
+    (Scorer then Router) with on-chain native deposit; callbacks advance
+    a state machine (`None → Flagged → Scored → Routed → Executed |
+    Cancelled`); Executor runs the liquidation, Coordinator transfers
+    seized collateral to the Splitter, and reputation is credited to all
+    four participating agents. Scorer and Router agent IDs are split into
+    Somnia-native and Sentinel-registry pairs, both owner-settable so we
+    can swap between the public `llm-inference` base agent and our own
+    custom registered agents without redeploying.
+  - `AutoProtectionVault` — minimal third-party consumer that wraps a
+    single user's lending position. The vault auto-registers itself as a
+    Watcher in its constructor and exposes a permissionless
+    `requestSentinelProtection()` that any keeper can call once the
+    vault's health factor drops below 1.
+- **91 Foundry tests passing** (LendingPool 27, AgentRegistry 16,
+  Reputation 8, Splitter 13, Coordinator 18, AutoProtectionVault 9). The
+  Coordinator suite covers the full end-to-end flow including the real
+  `createRequest` shape (intercepted via `vm.mockCall` with selector and
+  agent-ID prefix matching — no mock contract deployed) and validator
+  callbacks (delivered via `vm.prank(somniaPlatform)`).
 
 ## What's next
 
 In order:
 
-1. `AgentRegistry.sol` — register / discover specialist agents with metadata.
-2. `Reputation.sol` — track per-agent performance (success count, average
-   latency) as the basis for the Splitter's reputation-weighted distribution.
-3. `Coordinator.sol` — on-chain orchestrator. Wraps
-   `SomniaAgents.createRequest` for the Scorer and Router calls, persists the
-   consolidated `Response` as the trust-anchor receipt, gates the Executor on
-   the final routing decision.
-4. `Splitter.sol` — 60% agent operators (reputation-weighted) / 30% treasury
-   / 10% bounty pool. Pull payment pattern.
-5. `AutoProtectionVault.sol` (consumer dApp) — minimal vault that opens a
-   borrow position and pre-invokes Sentinel against itself.
-6. `packages/agents/`: WSS-based Watcher, on-chain Executor.
-7. Frontend dashboard.
+1. Foundry deployment script — Shannon testnet broadcast that wires up
+   tokens, oracle, pool, registry, reputation, splitter, coordinator, and
+   the demo vault in a single transaction sequence.
+2. `packages/agents/` — TypeScript runtime for the Watcher (WSS event
+   listener + `Coordinator.flagPosition` on candidates) and the Executor
+   (consumes `Routed` events, calls `Coordinator.execute`).
+3. Frontend dashboard.
