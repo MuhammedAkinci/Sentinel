@@ -175,21 +175,48 @@ npm run typecheck            # tsc -p across all packages
     Watcher in its constructor and exposes a permissionless
     `requestSentinelProtection()` that any keeper can call once the
     vault's health factor drops below 1.
-- **91 Foundry tests passing** (LendingPool 27, AgentRegistry 16,
-  Reputation 8, Splitter 13, Coordinator 18, AutoProtectionVault 9). The
-  Coordinator suite covers the full end-to-end flow including the real
-  `createRequest` shape (intercepted via `vm.mockCall` with selector and
-  agent-ID prefix matching — no mock contract deployed) and validator
-  callbacks (delivered via `vm.prank(somniaPlatform)`).
+- **Deployment script (`script/Deploy.s.sol`):** chain-id-driven branch.
+  On Shannon testnet (50312) it seeds initial USD price overrides and
+  turns on the public ERC20 faucet for demo convenience; on mainnet
+  (5031) it calls the one-way `lockOverrides()` and leaves faucets off.
+  `run()` reads configuration from environment variables and writes a
+  full address bundle to `./deployments/<chain>.json`; the pure
+  `deployAll(DeploymentConfig)` entry is exercised by an in-VM test.
+- **Off-chain agent runtime (`packages/agents/`):**
+  - `Watcher` — bootstraps in-memory position state by replaying the
+    LendingPool event history, subscribes to live deposit / withdraw /
+    borrow / repay / liquidation events over WSS, and on a configurable
+    poll interval calls `lendingPool.healthFactor` for every active
+    borrower. Positions whose HF drops below
+    `WATCHER_HEALTH_THRESHOLD` (default 1.05) are flagged through
+    `Coordinator.flagPosition`, with a per-user cooldown to prevent
+    duplicate flags during a single scoring window. Every revert path
+    is simulated first so failures surface as typed errors before
+    spending gas.
+  - `Executor` — subscribes to the Coordinator's `Routed` event and
+    runs `Coordinator.execute(caseId, executorAgentId)`. Wrong-status
+    reverts (typically another Executor already settled the case) are
+    logged and skipped without halting the loop. Past-but-unsettled
+    Routed events are replayed on startup.
+  - Both processes share `@sentinel/shared` for chain configuration,
+    deployment addresses, and zod-validated env loading. Strict
+    TypeScript end to end; no `any` in application code.
+- **108 tests passing in total**:
+  - 94 Foundry tests (LendingPool 27, AgentRegistry 16, Reputation 8,
+    Splitter 13, Coordinator 18, AutoProtectionVault 9, Deploy 3).
+    The Coordinator suite covers the full end-to-end flow including
+    the real `createRequest` shape (intercepted via `vm.mockCall`
+    with selector and agent-ID prefix matching, no mock contract
+    deployed) and validator callbacks (delivered via
+    `vm.prank(somniaPlatform)`).
+  - 14 Vitest tests for the agent runtime
+    (PositionTracker 9, HealthMonitor 5).
 
 ## What's next
 
 In order:
 
-1. Foundry deployment script — Shannon testnet broadcast that wires up
-   tokens, oracle, pool, registry, reputation, splitter, coordinator, and
-   the demo vault in a single transaction sequence.
-2. `packages/agents/` — TypeScript runtime for the Watcher (WSS event
-   listener + `Coordinator.flagPosition` on candidates) and the Executor
-   (consumes `Routed` events, calls `Coordinator.execute`).
-3. Frontend dashboard.
+1. Frontend dashboard.
+2. Optional: anvil-fork integration tests for the agent runtime that
+   exercise the full Watcher / Coordinator / Executor handshake without
+   a live Somnia connection.
