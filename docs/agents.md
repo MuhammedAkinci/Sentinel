@@ -1,0 +1,243 @@
+# Sentinel agent specifications
+
+This document defines the **on-chain wire format** and **prompt contract** for
+the two Somnia native agents Sentinel invokes per case: the **Scorer** and the
+**Router**. It is the source of truth that the Coordinator's encode/decode
+logic, the prompt files supplied to `llm-inference`, and the off-chain
+validation step all derive from.
+
+Both agents are invoked through `ISomniaAgents.createRequest`. The Coordinator
+sets the `agentId` of each agent at deploy time via
+`setScorerSomniaAgentId` / `setRouterSomniaAgentId`, so the same on-chain
+Coordinator can swap between the public `llm-inference` base agent and any
+domain-specific agents we register in the future without contract upgrades.
+
+As of May 2026 Somnia DevRel has confirmed that custom agent registration is
+not yet open. Sentinel therefore points both agent IDs at the public
+`llm-inference` base agent and supplies the agent-specific behaviour through
+prompt configuration.
+
+---
+
+## Wire format
+
+The Coordinator's decoders are deliberately tight; any deviation from the
+exact byte length aborts the case with `InvalidScorePayload` or
+`InvalidRoutePayload`.
+
+| Agent  | Payload (Coordinator → agent)                                     | Result (agent → Coordinator)            |
+| ------ | ----------------------------------------------------------------- | --------------------------------------- |
+| Scorer | `abi.encode(user, collateralAsset, debtAsset, healthFactor18)`    | `abi.encode(uint256 score)` — 32 bytes  |
+| Router | `abi.encode(user, collateralAsset, debtAsset, score, currentHF18)`| `abi.encode(uint256 debtToCover)` — 32 bytes |
+
+Both responses are a single `uint256`. This matches `llm-inference`'s
+clamped-numeric output mode, which is the only structured output shape we
+can rely on from a base agent.
+
+The Coordinator carries `collateralAsset` and `debtAsset` forward from the
+Watcher's original `flagPosition` call. Today's Router only chooses
+`debtToCover`; the `LiquidationRoute` struct in the Case stays unchanged so a
+future Router that returns collateral choice, DEX path, or slippage budget
+can be wired in by extending the decoder without touching storage or the
+Executor.
+
+---
+
+## Scorer
+
+The Scorer assigns a liquidation priority between `0` and `10_000`.
+
+### Inputs supplied in the payload
+
+- `user` — the borrower under evaluation.
+- `collateralAsset` — the asset proposed for seizure.
+- `debtAsset` — the asset whose debt would be repaid.
+- `healthFactor18` — the position's on-chain HF at flag time, scaled to 1e18.
+
+The prompt template additionally surfaces market context that the Scorer
+needs but is too heavy to ship as raw payload bytes (the prompt builder
+reads these from the Coordinator's view functions at request time):
+
+- Reserve LT, liquidation bonus, close factor.
+- Collateral and debt balances of the user.
+- Current price of each asset in USD.
+- Adjusted collateral value (`bal × price × LT`) and total debt value.
+
+### Score interpretation
+
+- `< scoreThreshold` (default `5_000`): case cancelled at the Scorer
+  callback. No Router invocation, no Executor work. The Scorer is NOT
+  penalised — a low score is a legitimate finding.
+- `>= scoreThreshold`: case advances to Routing.
+
+The threshold is owner-settable via `Coordinator.setScoreThreshold`.
+
+### Prompt template
+
+```text
+You are Sentinel's risk Scorer. Your job is to assess whether the
+following lending position should be prioritised for immediate
+liquidation, on a 0..10000 scale.
+
+Inputs (already validated on-chain):
+  user:                   {user}
+  collateralAsset:        {collateralAsset}   ({collateralSymbol})
+  collateralBalance:      {collateralBalanceHuman}
+  collateralPriceUSD:     {collateralPriceUSDHuman}
+  collateralValueUSD:     {collateralValueUSDHuman}
+  reserveLiqThresholdBps: {ltBps}
+  adjustedCollateralUSD:  {adjustedCollateralUSDHuman}
+
+  debtAsset:              {debtAsset}        ({debtSymbol})
+  debtBalance:            {debtBalanceHuman}
+  debtPriceUSD:           {debtPriceUSDHuman}
+  debtValueUSD:           {debtValueUSDHuman}
+
+  healthFactor:           {hfHuman}
+  liquidationBonusBps:    {lbBps}
+  closeFactorBps:         {cfBps}
+
+Score guidance:
+  - 0 means do not liquidate. Below 5000 cancels the case.
+  - 10000 means liquidate immediately at full close factor.
+  - Use HF as the dominant signal: HF below 0.9 should score above 8000;
+    HF in (0.9, 1.0) should score 6000..8500; HF above 1.0 indicates the
+    position is no longer liquidatable on-chain and should score 0.
+  - Penalise small positions (debtValueUSD below 100): cap at 3000 so
+    Sentinel does not pay agent rewards out of dust.
+  - Penalise very thin collateral cushions (adjusted/debt below 1.02) by
+    scoring slightly higher (+500) because price recovery is unlikely
+    to save them before consensus completes.
+
+Return a single ABI-encoded uint256 between 0 and 10000.
+```
+
+`llm-inference` is configured with a fixed random seed and temperature 0 so
+the validator subcommittee converges on a deterministic score.
+
+---
+
+## Router
+
+The Router chooses how much debt the Executor should cover within the
+reserve's close factor.
+
+### Inputs supplied in the payload
+
+- `user`, `collateralAsset`, `debtAsset` — already known to the Coordinator
+  but mirrored so the agent's prompt is self-contained.
+- `score` — the Scorer's output, 0..10_000.
+- `currentHF18` — the position's HF at Routing time. Coordinator re-reads
+  this between the two agent calls; the price may have moved during the
+  Scorer's consensus window.
+
+### Output
+
+`abi.encode(uint256 debtToCover)`, denominated in the **debt asset's
+underlying decimals** (so 7_500 USDC is encoded as `7_500_000_000`).
+
+The Coordinator enforces `debtToCover <= userDebt × closeFactorBps / 10_000`
+on the Executor path; values above the cap revert at execute time with
+`CloseFactorExceeded`. The Router should always stay strictly inside this
+cap.
+
+### Prompt template
+
+```text
+You are Sentinel's route selector. The Scorer has cleared this position
+for liquidation. Decide how much of the user's debt to repay in this pass.
+
+Inputs (already validated on-chain):
+  user:                   {user}
+  debtAsset:              {debtAsset}        ({debtSymbol})
+  debtBalance:            {debtBalanceRaw} (underlying base units)
+  debtBalanceHuman:       {debtBalanceHuman}
+  closeFactorBps:         {cfBps}            (max share per pass)
+
+  collateralAsset:        {collateralAsset}  ({collateralSymbol})
+  collateralBalanceHuman: {collateralBalanceHuman}
+  collateralPriceUSD:     {collateralPriceUSDHuman}
+  liquidationBonusBps:    {lbBps}
+
+  scorerOutput:           {score}            (0..10000)
+  currentHF:              {hfHuman}
+
+Routing guidance:
+  - Maximum allowed: debtBalanceRaw * closeFactorBps / 10000.
+  - Default to the maximum allowed when score >= 8000 and currentHF < 0.9.
+  - Step down to 50% of maximum when 5000 <= score < 8000 or
+    0.9 <= currentHF < 1.0 — partial liquidation gives price a chance to
+    recover and reduces realised slippage on the collateral seize.
+  - Never return 0. If the case is unsafe to liquidate, the Scorer should
+    have cancelled it; reaching the Router means the work proceeds.
+  - The seized collateral must not exceed userCollateralBalance after the
+    bonus is applied. If `debtToCover * (1 + bonus) / collateralPrice >
+    userCollateralBalance`, cap debtToCover so the seize fits.
+
+Return a single ABI-encoded uint256 expressed in the debt asset's
+underlying decimals (USDC: 6 decimals).
+```
+
+The Coordinator stamps the chosen `debtToCover` into the case's
+`LiquidationRoute` together with the carried-forward collateral and debt
+assets, then emits `Routed`.
+
+---
+
+## Future Router roadmap
+
+The wire format intentionally leaves room to grow without breaking the
+Executor.
+
+Stage 1 — current:
+
+- Output: `uint256 debtToCover`.
+- The Coordinator constructs the route from carried-forward asset choices.
+
+Stage 2 — multi-collateral selection:
+
+- Output: `(uint8 collateralIndex, uint256 debtToCover)` where
+  `collateralIndex` selects from a user-specific candidate list the
+  Coordinator builds from `lendingPool.reserveList()` and sToken balances.
+- Coordinator's `_decodeDebtToCover` becomes
+  `_decodeRouteV2`, expecting 33+ byte payload (or padded to 64).
+- The `LiquidationRoute` struct already stores `collateralAsset`, so
+  storage layout is preserved.
+
+Stage 3 — DEX path + slippage budget:
+
+- Output: full ABI-encoded struct
+  `(uint8 collateralIndex, uint256 debtToCover, uint8 dexIndex, uint256 minOut, bytes routeHints)`.
+- Executor extends to swap the seized collateral back to the debt asset
+  through the chosen DEX path before settling with the Splitter.
+- Splitter handles either token denomination via its asset-agnostic
+  payout map (no Splitter change required).
+
+Stage 4 — multi-protocol orchestration:
+
+- Output also includes a target protocol address so Sentinel can liquidate
+  positions on third-party lending markets, with per-protocol adapters
+  registered on the Coordinator.
+
+Each stage is a Router-side prompt change plus a Coordinator decoder
+addition. None of them require redeploying the Splitter, AgentRegistry,
+Reputation, or LendingPool.
+
+---
+
+## Off-chain prompt builder
+
+The Watcher does not call `llm-inference` directly — only the on-chain
+Coordinator does. The prompt builder lives in the Coordinator's payload
+construction layer: `flagPosition` and `handleScorerResponse` both ABI-
+encode a tight argument list and ship it as the `payload` parameter of
+`createRequest`. The Somnia validator subcommittee receives the payload,
+expands it into the human-readable prompts above using a templating step
+inside the agent runtime, and returns the encoded numeric output.
+
+The templating step is the responsibility of the agent runtime
+configuration filed under the `scorerSomniaAgentId` / `routerSomniaAgentId`
+slots. Until Somnia opens custom agent registration, both slots point at
+`llm-inference` and the prompt templates live in this document — the
+runtime configuration that ships with our deployment will reference these
+templates verbatim.

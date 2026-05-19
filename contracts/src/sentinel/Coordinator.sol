@@ -38,6 +38,13 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         Cancelled
     }
 
+    /// @notice The route the Executor follows when settling a case.
+    /// @dev Today the Router agent only decides `debtToCover` (within the
+    ///      reserve's close factor); `collateralAsset` and `debtAsset` are
+    ///      carried forward from the Watcher's original flag. The struct
+    ///      retains all three fields so a richer future Router that returns
+    ///      collateral choice / DEX path / slippage budget can be wired in
+    ///      without touching the storage layout of Case.
     struct LiquidationRoute {
         address collateralAsset;
         address debtAsset;
@@ -144,8 +151,6 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
     error InsufficientDebtTokenBalance(IERC20 token, uint256 required, uint256 available);
     error InvalidScorePayload();
     error InvalidRoutePayload();
-    error RouteCollateralAssetMismatch(address expected, address actual);
-    error RouteDebtAssetMismatch(address expected, address actual);
     error ScorerSomniaAgentIdNotSet();
     error RouterSomniaAgentIdNotSet();
     error ScorerSentinelAgentIdNotSet();
@@ -379,17 +384,19 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
             return;
         }
 
-        LiquidationRoute memory route = _decodeRoute(result);
-        if (route.collateralAsset != c.collateralAsset) {
-            revert RouteCollateralAssetMismatch(c.collateralAsset, route.collateralAsset);
-        }
-        if (route.debtAsset != c.debtAsset) {
-            revert RouteDebtAssetMismatch(c.debtAsset, route.debtAsset);
-        }
-
-        c.route = route;
+        // Router decides only `debtToCover`; the collateral and debt assets
+        // come from the Watcher's flag (already on the case). This keeps the
+        // agent's wire output a single uint256, matching llm-inference's
+        // numeric output mode, while leaving the LiquidationRoute struct
+        // free to carry richer fields in a future Router upgrade.
+        uint256 debtToCover = _decodeDebtToCover(result);
+        c.route = LiquidationRoute({
+            collateralAsset: c.collateralAsset,
+            debtAsset: c.debtAsset,
+            debtToCover: debtToCover
+        });
         c.status = CaseStatus.Routed;
-        emit Routed(caseId, route.collateralAsset, route.debtAsset, route.debtToCover);
+        emit Routed(caseId, c.collateralAsset, c.debtAsset, debtToCover);
     }
 
     /* ---------------------------- Executor gate -------------------------- */
@@ -478,9 +485,9 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         return abi.decode(result, (uint256));
     }
 
-    function _decodeRoute(bytes memory result) private pure returns (LiquidationRoute memory r) {
-        if (result.length != 96) revert InvalidRoutePayload();
-        r = abi.decode(result, (LiquidationRoute));
+    function _decodeDebtToCover(bytes memory result) private pure returns (uint256) {
+        if (result.length != 32) revert InvalidRoutePayload();
+        return abi.decode(result, (uint256));
     }
 
     function _requireOwnedAgent(

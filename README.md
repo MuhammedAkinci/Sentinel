@@ -107,23 +107,22 @@ npm run typecheck            # tsc -p across all packages
 
 ---
 
-## Open questions (do NOT proceed past these without resolving)
+## Open questions
 
-1. **Custom agent registration on Somnia.** Public docs only describe the three
-   base agents (`json-api-request`, `llm-inference`, `llm-parse-website`).
-   The registration path for domain-specific agents (e.g. our Scorer) is not
-   publicly documented. Pending answer from Somnia DevRel on Discord.
-
-   Interim approach: Coordinator stores `scorerAgentId` and `routerAgentId` as
-   settable parameters. If custom registration is unavailable, both point at
-   `llm-inference` with carefully structured prompts. If it is available, swap
-   in our custom IDs without touching the contract logic.
+1. **Custom agent registration on Somnia.** Confirmed by Somnia DevRel
+   (May 2026): custom agent registration is not yet active. Sentinel
+   therefore points both the Scorer and Router agent IDs at the public
+   `llm-inference` base agent, configured through the prompts defined in
+   [`docs/agents.md`](docs/agents.md). The Coordinator's
+   `scorerSomniaAgentId` and `routerSomniaAgentId` slots are owner-
+   settable, so the migration to a future custom agent is a single
+   transaction with no contract upgrade.
 
 2. **Agentathon judging weights.** We assume equal weighting across the four
-   public criteria (Functionality, Agent-First Design, Innovation & Technical
-   Creativity, Autonomous Performance). The official source page
+   public criteria (Functionality, Agent-First Design, Innovation and
+   Technical Creativity, Autonomous Performance). The official source page
    (`encode.club/somnia-agentathon`) did not expose detail through public
-   scraping — re-verify before final submission.
+   scraping; re-verify before final submission.
 
 ---
 
@@ -212,11 +211,52 @@ npm run typecheck            # tsc -p across all packages
   - 14 Vitest tests for the agent runtime
     (PositionTracker 9, HealthMonitor 5).
 
+## Agent specifications
+
+The wire format and prompt templates for both Somnia agents are defined in
+[`docs/agents.md`](docs/agents.md). That document is the source of truth
+the Coordinator's encode / decode logic mirrors.
+
+In short:
+
+- Scorer receives the encoded position and returns a single
+  `uint256` score in `[0, 10_000]`. Below `scoreThreshold` cancels the case
+  without penalty; at or above it the Router is invoked.
+- Router receives the scored position and returns a single `uint256`
+  `debtToCover` denominated in the debt asset's underlying decimals. The
+  Coordinator carries `collateralAsset` and `debtAsset` forward from the
+  Watcher's original flag.
+
+### Router production roadmap
+
+The Router wire format is deliberately room-to-grow. Each stage below adds
+fields to the agent output and a decoder branch on the Coordinator without
+altering the `LiquidationRoute` storage layout, the Executor, or the
+Splitter:
+
+1. **Today** — output `uint256 debtToCover`. Coordinator constructs the
+   route from carried-forward asset choices.
+2. **Multi-collateral selection** — output `(uint8 collateralIndex, uint256 debtToCover)`
+   so a position with multiple collaterals can have the most liquidatable
+   one targeted.
+3. **DEX path and slippage budget** — output the full struct
+   `(uint8 collateralIndex, uint256 debtToCover, uint8 dexIndex, uint256 minOut, bytes routeHints)`.
+   The Executor swaps the seized collateral back to the debt asset through
+   the chosen DEX before forwarding to the Splitter.
+4. **Multi-protocol orchestration** — output also names a target protocol
+   so Sentinel can liquidate positions on third-party lending markets via
+   per-protocol adapters registered on the Coordinator.
+
+See [`docs/agents.md`](docs/agents.md) for the prompt templates and the
+exact byte layout of each stage.
+
 ## What's next
 
 In order:
 
 1. Frontend dashboard.
-2. Optional: anvil-fork integration tests for the agent runtime that
-   exercise the full Watcher / Coordinator / Executor handshake without
-   a live Somnia connection.
+2. Anvil-fork integration tests for the agent runtime that exercise the
+   full Watcher / Coordinator / Executor handshake without a live Somnia
+   connection.
+3. Router roadmap stage 2 (multi-collateral selection) once the demo flow
+   is recorded.

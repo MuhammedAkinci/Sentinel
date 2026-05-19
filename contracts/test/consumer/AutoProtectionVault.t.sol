@@ -224,15 +224,10 @@ contract AutoProtectionVaultTest is Test {
             _emptyRequest()
         );
 
-        Coordinator.LiquidationRoute memory route = Coordinator.LiquidationRoute({
-            collateralAsset: address(weth),
-            debtAsset: address(usdc),
-            debtToCover: 7_500e6
-        });
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
-            _successResponse(abi.encode(route)),
+            _successResponse(abi.encode(uint256(7_500e6))),
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );

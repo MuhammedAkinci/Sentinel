@@ -379,19 +379,16 @@ contract CoordinatorTest is Test {
             _emptyRequest()
         );
 
-        Coordinator.LiquidationRoute memory route = Coordinator.LiquidationRoute({
-            collateralAsset: address(weth),
-            debtAsset: address(usdc),
-            debtToCover: 7_500e6
-        });
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
-            _successResponse(abi.encode(route)),
+            _successResponse(abi.encode(uint256(7_500e6))),
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
 
+        // The Router only returns debtToCover; the Coordinator carries the
+        // collateral and debt assets forward from the Watcher's original flag.
         Coordinator.Case memory c = coordinator.getCase(caseId);
         assertEq(uint8(c.status), uint8(Coordinator.CaseStatus.Routed));
         assertEq(c.route.collateralAsset, address(weth));
@@ -400,7 +397,7 @@ contract CoordinatorTest is Test {
         assertEq(c.routerAgentId, idR);
     }
 
-    function test_revert_routerAssetMismatch() public {
+    function test_invalidRoutePayloadReverts() public {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
         _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
@@ -415,20 +412,13 @@ contract CoordinatorTest is Test {
             _emptyRequest()
         );
 
-        Coordinator.LiquidationRoute memory route = Coordinator.LiquidationRoute({
-            collateralAsset: address(0xBAD), // mismatch
-            debtAsset: address(usdc),
-            debtToCover: 1
-        });
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Coordinator.RouteCollateralAssetMismatch.selector, address(weth), address(0xBAD)
-            )
-        );
+        // 16-byte payload — not the expected single 32-byte uint256.
+        bytes memory badResult = hex"0123456789abcdef0123456789abcdef";
+        vm.expectRevert(Coordinator.InvalidRoutePayload.selector);
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
-            _successResponse(abi.encode(route)),
+            _successResponse(badResult),
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
@@ -449,15 +439,10 @@ contract CoordinatorTest is Test {
             _emptyRequest()
         );
 
-        Coordinator.LiquidationRoute memory route = Coordinator.LiquidationRoute({
-            collateralAsset: address(weth),
-            debtAsset: address(usdc),
-            debtToCover: 7_500e6
-        });
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
-            _successResponse(abi.encode(route)),
+            _successResponse(abi.encode(uint256(7_500e6))),
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
@@ -518,15 +503,10 @@ contract CoordinatorTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
-        Coordinator.LiquidationRoute memory route = Coordinator.LiquidationRoute({
-            collateralAsset: address(weth),
-            debtAsset: address(usdc),
-            debtToCover: 7_500e6
-        });
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
-            _successResponse(abi.encode(route)),
+            _successResponse(abi.encode(uint256(7_500e6))),
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
@@ -578,15 +558,10 @@ contract CoordinatorTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
-        Coordinator.LiquidationRoute memory route = Coordinator.LiquidationRoute({
-            collateralAsset: address(weth),
-            debtAsset: address(usdc),
-            debtToCover: 7_500e6
-        });
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
-            _successResponse(abi.encode(route)),
+            _successResponse(abi.encode(uint256(7_500e6))),
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
