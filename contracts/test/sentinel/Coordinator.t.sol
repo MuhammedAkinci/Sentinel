@@ -217,6 +217,8 @@ contract CoordinatorTest is Test {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
 
+        // Coordinator forwards the Watcher-supplied payload verbatim. Verify
+        // the createRequest call uses that exact byte string.
         vm.expectCall(
             SOMNIA_PLATFORM,
             PER_REQUEST_DEPOSIT,
@@ -225,11 +227,11 @@ contract CoordinatorTest is Test {
                 SCORER_SOMNIA_ID,
                 address(coordinator),
                 coordinator.handleScorerResponse.selector,
-                abi.encode(alice, address(weth), address(usdc), pool.healthFactor(alice))
+                hex"01"
             )
         );
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         Coordinator.Case memory c = coordinator.getCase(caseId);
         assertEq(uint8(c.status), uint8(Coordinator.CaseStatus.Flagged));
@@ -246,7 +248,7 @@ contract CoordinatorTest is Test {
             abi.encodeWithSelector(Coordinator.PositionHealthy.selector, pool.healthFactor(alice))
         );
         vm.prank(opW);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
     }
 
     function test_revert_flagPositionWrongRole() public {
@@ -258,7 +260,7 @@ contract CoordinatorTest is Test {
             )
         );
         vm.prank(opE);
-        coordinator.flagPosition(idE, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idE, alice, address(weth), address(usdc), hex"01");
     }
 
     function test_revert_flagPositionNotOperator() public {
@@ -267,7 +269,7 @@ contract CoordinatorTest is Test {
             abi.encodeWithSelector(Coordinator.AgentNotOwnedByCaller.selector, idW, opE)
         );
         vm.prank(opE);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
     }
 
     function test_revert_flagPositionScorerIdNotSet() public {
@@ -276,18 +278,19 @@ contract CoordinatorTest is Test {
         coordinator.setScorerSomniaAgentId(0);
         vm.expectRevert(Coordinator.ScorerSomniaAgentIdNotSet.selector);
         vm.prank(opW);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
     }
 
     function test_scorerCallbackAdvancesToScored() public {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
-        _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
 
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
-        bytes memory scoreResult = abi.encode(uint256(8_000));
+        // llm-inference returns int256; uint256 with the same byte layout for
+        // non-negative values, so test fixtures use int256 explicitly.
+        bytes memory scoreResult = abi.encode(int256(8_000));
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
             SCORER_REQ_ID,
@@ -300,15 +303,16 @@ contract CoordinatorTest is Test {
         assertEq(uint8(c.status), uint8(Coordinator.CaseStatus.Scored));
         assertEq(c.score, 8_000);
         assertEq(c.scorerAgentId, idS);
-        assertEq(c.routeRequestId, ROUTER_REQ_ID);
-        assertEq(coordinator.requestToCase(ROUTER_REQ_ID), caseId);
+        // The Router request is NOT auto-issued anymore — it waits for an
+        // explicit advanceToRouter call.
+        assertEq(c.routeRequestId, 0);
     }
 
     function test_scorerBelowThresholdCancels() public {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         bytes memory scoreResult = abi.encode(uint256(1_000)); // below 5000
         vm.prank(SOMNIA_PLATFORM);
@@ -329,7 +333,7 @@ contract CoordinatorTest is Test {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         // First give the Scorer some score to verify the penalty path clamps at zero.
         // Bring scorer to score=100 first via a separate completed case (would be complex).
@@ -350,7 +354,7 @@ contract CoordinatorTest is Test {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
         vm.prank(opW);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         vm.expectRevert(
             abi.encodeWithSelector(Coordinator.OnlySomniaPlatform.selector, address(this))
@@ -369,7 +373,7 @@ contract CoordinatorTest is Test {
         _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
 
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
@@ -378,6 +382,10 @@ contract CoordinatorTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
+
+        // Permissionless: Watcher (or any keeper) advances the Scored case to
+        // Routed by submitting the Router prompt payload.
+        coordinator.advanceToRouter(caseId, hex"02");
 
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
@@ -403,7 +411,7 @@ contract CoordinatorTest is Test {
         _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
 
         vm.prank(opW);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
             SCORER_REQ_ID,
@@ -412,7 +420,9 @@ contract CoordinatorTest is Test {
             _emptyRequest()
         );
 
-        // 16-byte payload — not the expected single 32-byte uint256.
+        coordinator.advanceToRouter(caseId, hex"02");
+
+        // 16-byte payload — not the expected single 32-byte int256.
         bytes memory badResult = hex"0123456789abcdef0123456789abcdef";
         vm.expectRevert(Coordinator.InvalidRoutePayload.selector);
         vm.prank(SOMNIA_PLATFORM);
@@ -430,7 +440,7 @@ contract CoordinatorTest is Test {
         _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
 
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
             SCORER_REQ_ID,
@@ -438,6 +448,10 @@ contract CoordinatorTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
+
+        // Permissionless: Watcher (or any keeper) advances the Scored case to
+        // Routed by submitting the Router prompt payload.
+        coordinator.advanceToRouter(caseId, hex"02");
 
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
@@ -495,7 +509,7 @@ contract CoordinatorTest is Test {
         _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
 
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
             SCORER_REQ_ID,
@@ -503,6 +517,10 @@ contract CoordinatorTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
+
+        // Permissionless: advance the Scored case to Router via prompt payload.
+        coordinator.advanceToRouter(caseId, hex"02");
+
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
@@ -525,7 +543,7 @@ contract CoordinatorTest is Test {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         // Case is Flagged, not Routed.
         vm.expectRevert(
@@ -550,7 +568,7 @@ contract CoordinatorTest is Test {
         coordinator.withdrawERC20(IERC20(address(usdc)), owner, 100_000e6);
 
         vm.prank(opW);
-        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        uint256 caseId = coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
             SCORER_REQ_ID,
@@ -558,6 +576,10 @@ contract CoordinatorTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
+
+        // Permissionless: advance the Scored case to Router via prompt payload.
+        coordinator.advanceToRouter(caseId, hex"02");
+
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(
             ROUTER_REQ_ID,
@@ -582,7 +604,7 @@ contract CoordinatorTest is Test {
         _crashEth();
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
         vm.prank(opW);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
 
         // 16-byte result (not 32) → InvalidScorePayload.
         bytes memory badResult = hex"0123456789abcdef0123456789abcdef";
@@ -619,6 +641,6 @@ contract CoordinatorTest is Test {
             )
         );
         vm.prank(opW);
-        coordinator.flagPosition(idW, alice, address(weth), address(usdc));
+        coordinator.flagPosition(idW, alice, address(weth), address(usdc), hex"01");
     }
 }

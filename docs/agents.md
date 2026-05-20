@@ -17,6 +17,23 @@ not yet open. Sentinel therefore points both agent IDs at the public
 `llm-inference` base agent and supplies the agent-specific behaviour through
 prompt configuration.
 
+### Base agent IDs on Shannon testnet
+
+Decoded from the official AgentRegistry at
+`0x08D1Fc808f1983d2Ea7B63a28ECD4d8C885Cd02A` via `getAllAgents()` and
+`getAgent(uint256)`:
+
+| Agent name        | Hex ID                | Decimal ID            |
+| ----------------- | --------------------- | --------------------- |
+| llm-inference     | `0xb24ac1afbcefc708`  | `12847293847561029384`|
+| llm-parse-website | `0xb2ae9d1f35cc82fd`  | `12875401142070969085`|
+| json-fetch        | `0xb6d47da8dbbcb1b1`  | `13174292974160097713`|
+
+Sentinel sets `SCORER_AGENT_ID = ROUTER_AGENT_ID = 12847293847561029384` in
+`.env`, then the Coordinator's `setScorerSomniaAgentId` and
+`setRouterSomniaAgentId` route both roles into the same `llm-inference`
+agent with role-specific prompts.
+
 ---
 
 ## Wire format

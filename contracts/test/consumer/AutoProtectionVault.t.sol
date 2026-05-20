@@ -189,7 +189,7 @@ contract AutoProtectionVaultTest is Test {
                 Coordinator.PositionHealthy.selector, pool.healthFactor(address(vault))
             )
         );
-        vault.requestSentinelProtection();
+        vault.requestSentinelProtection(hex"01");
     }
 
     function test_protectionRequestOnUnhealthyPositionStartsCase() public {
@@ -198,7 +198,7 @@ contract AutoProtectionVaultTest is Test {
         _mockCreateRequest(SCORER_SOMNIA_ID, SCORER_REQ_ID);
 
         vm.recordLogs();
-        uint256 caseId = vault.requestSentinelProtection();
+        uint256 caseId = vault.requestSentinelProtection(hex"01");
         assertEq(caseId, 1);
 
         Coordinator.Case memory c = coordinator.getCase(caseId);
@@ -214,7 +214,7 @@ contract AutoProtectionVaultTest is Test {
         _mockCreateRequest(ROUTER_SOMNIA_ID, ROUTER_REQ_ID);
 
         // Anyone can trigger the protection — here the user's keeper.
-        uint256 caseId = vault.requestSentinelProtection();
+        uint256 caseId = vault.requestSentinelProtection(hex"01");
 
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleScorerResponse(
@@ -223,6 +223,9 @@ contract AutoProtectionVaultTest is Test {
             ISomniaAgents.ResponseStatus.Success,
             _emptyRequest()
         );
+
+        // Permissionless advance: any keeper supplies the Router prompt.
+        coordinator.advanceToRouter(caseId, hex"02");
 
         vm.prank(SOMNIA_PLATFORM);
         coordinator.handleRouterResponse(

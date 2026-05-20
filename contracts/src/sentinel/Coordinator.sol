@@ -124,7 +124,10 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         uint256 indexed watcherAgentId,
         uint256 scoreRequestId
     );
-    event Scored(uint256 indexed caseId, uint256 score, uint256 routeRequestId);
+    /// @dev Emitted when the Scorer callback lands. The case is now awaiting an
+    ///      `advanceToRouter` call; `routeRequestId` is zero until then.
+    event Scored(uint256 indexed caseId, uint256 score);
+    event RouterAdvanced(uint256 indexed caseId, uint256 routeRequestId);
     event Routed(uint256 indexed caseId, address collateralAsset, address debtAsset, uint256 debtToCover);
     event CaseCancelled(uint256 indexed caseId, bytes reason);
     event Executed(
@@ -155,6 +158,10 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
     error RouterSomniaAgentIdNotSet();
     error ScorerSentinelAgentIdNotSet();
     error RouterSentinelAgentIdNotSet();
+    error RouterAlreadyAdvanced(uint256 caseId);
+    error ScorerPayloadEmpty();
+    error RouterPayloadEmpty();
+    error NegativeAgentResponse(int256 value);
 
     /* ----------------------------- Constructor --------------------------- */
 
@@ -242,15 +249,25 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
     /* ------------------------- Watcher entry point ----------------------- */
 
     /// @notice Flags an unhealthy position and kicks off the Scorer call.
+    /// @dev The Watcher (the trusted Sentinel agent that registered itself in
+    ///      AgentRegistry) is responsible for building `scorerPayload` to
+    ///      match the Somnia base agent's expected ABI. For Sentinel's current
+    ///      deployment the Scorer is the `llm-inference` base agent and the
+    ///      payload is `abi.encodeWithSignature("inferNumber(string,string,int256,int256,bool)", prompt, system, 0, 10000, false)`.
+    ///      Coordinator forwards the bytes verbatim — it is the trust anchor
+    ///      that the prompt and the position match (which the Watcher
+    ///      enforces by reading on-chain state).
     /// @param watcherAgentId The Watcher agent ID owned by msg.sender.
     /// @param user Borrower whose position is below HF=1.
     /// @param collateralAsset Collateral the Watcher proposes to seize.
     /// @param debtAsset Debt asset the Watcher proposes to repay.
+    /// @param scorerPayload Bytes ABI-encoded for the configured Scorer agent.
     function flagPosition(
         uint256 watcherAgentId,
         address user,
         address collateralAsset,
-        address debtAsset
+        address debtAsset,
+        bytes calldata scorerPayload
     )
         external
         nonReentrant
@@ -259,6 +276,7 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         _requireOwnedAgent(watcherAgentId, msg.sender, AgentRegistry.Role.Watcher);
         if (scorerSomniaAgentId == 0) revert ScorerSomniaAgentIdNotSet();
         if (scorerSentinelAgentId == 0) revert ScorerSentinelAgentIdNotSet();
+        if (scorerPayload.length == 0) revert ScorerPayloadEmpty();
 
         uint256 hf = lendingPool.healthFactor(user);
         if (hf >= 1e18) revert PositionHealthy(hf);
@@ -273,14 +291,46 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         c.status = CaseStatus.Flagged;
         c.createdAt = block.timestamp;
 
-        bytes memory payload = abi.encode(user, collateralAsset, debtAsset, hf);
         uint256 reqId = _createSomniaRequest(
-            scorerSomniaAgentId, this.handleScorerResponse.selector, payload
+            scorerSomniaAgentId, this.handleScorerResponse.selector, scorerPayload
         );
         c.scoreRequestId = reqId;
         requestToCase[reqId] = caseId;
 
         emit PositionFlagged(caseId, user, watcherAgentId, reqId);
+    }
+
+    /// @notice Submits the Router prompt for a case whose Scorer callback has
+    ///         landed. Permissionless: any keeper may push the case forward
+    ///         (the Router payload is a prompt; bad prompts only burn the
+    ///         caller's gas and trigger a Cancelled callback).
+    /// @param caseId Identifier of a case currently in Scored status.
+    /// @param routerPayload Bytes ABI-encoded for the configured Router agent.
+    function advanceToRouter(
+        uint256 caseId,
+        bytes calldata routerPayload
+    )
+        external
+        nonReentrant
+    {
+        Case storage c = _cases[caseId];
+        if (c.id == 0) revert CaseNotFound(caseId);
+        if (c.status != CaseStatus.Scored) {
+            revert WrongStatus(caseId, CaseStatus.Scored, c.status);
+        }
+        if (c.routeRequestId != 0) revert RouterAlreadyAdvanced(caseId);
+        if (routerSomniaAgentId == 0) revert RouterSomniaAgentIdNotSet();
+        if (routerSentinelAgentId == 0) revert RouterSentinelAgentIdNotSet();
+        if (routerPayload.length == 0) revert RouterPayloadEmpty();
+
+        c.routerAgentId = routerSentinelAgentId;
+        uint256 reqId = _createSomniaRequest(
+            routerSomniaAgentId, this.handleRouterResponse.selector, routerPayload
+        );
+        c.routeRequestId = reqId;
+        requestToCase[reqId] = caseId;
+
+        emit RouterAdvanced(caseId, reqId);
     }
 
     /* ----------------------- Somnia callback: scorer --------------------- */
@@ -333,20 +383,11 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
             return;
         }
 
+        // Stop here. An off-chain keeper (typically the same Watcher) reads
+        // this event, composes the Router prompt, and calls
+        // `advanceToRouter(caseId, routerPayload)` in a separate transaction.
         c.status = CaseStatus.Scored;
-        if (routerSomniaAgentId == 0) revert RouterSomniaAgentIdNotSet();
-        if (routerSentinelAgentId == 0) revert RouterSentinelAgentIdNotSet();
-
-        bytes memory payload = abi.encode(
-            c.user, c.collateralAsset, c.debtAsset, score, lendingPool.healthFactor(c.user)
-        );
-        uint256 reqId = _createSomniaRequest(
-            routerSomniaAgentId, this.handleRouterResponse.selector, payload
-        );
-        c.routeRequestId = reqId;
-        requestToCase[reqId] = caseId;
-
-        emit Scored(caseId, score, reqId);
+        emit Scored(caseId, score);
     }
 
     /* ----------------------- Somnia callback: router --------------------- */
@@ -367,7 +408,7 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         if (c.status != CaseStatus.Scored) {
             revert WrongStatus(caseId, CaseStatus.Scored, c.status);
         }
-        c.routerAgentId = routerSentinelAgentId;
+        // `c.routerAgentId` was set during advanceToRouter; no re-assignment.
 
         if (status != ISomniaAgents.ResponseStatus.Success) {
             c.status = CaseStatus.Cancelled;
@@ -480,14 +521,22 @@ contract Coordinator is Ownable2Step, ReentrancyGuard {
         return "";
     }
 
+    /// @dev llm-inference's inferNumber returns an int256 clamped to the
+    ///      [minValue, maxValue] range supplied in the payload. Sentinel
+    ///      requests non-negative ranges only, so we reject negatives
+    ///      defensively and cast to uint256.
     function _decodeScore(bytes memory result) private pure returns (uint256) {
         if (result.length != 32) revert InvalidScorePayload();
-        return abi.decode(result, (uint256));
+        int256 raw = abi.decode(result, (int256));
+        if (raw < 0) revert NegativeAgentResponse(raw);
+        return uint256(raw);
     }
 
     function _decodeDebtToCover(bytes memory result) private pure returns (uint256) {
         if (result.length != 32) revert InvalidRoutePayload();
-        return abi.decode(result, (uint256));
+        int256 raw = abi.decode(result, (int256));
+        if (raw < 0) revert NegativeAgentResponse(raw);
+        return uint256(raw);
     }
 
     function _requireOwnedAgent(

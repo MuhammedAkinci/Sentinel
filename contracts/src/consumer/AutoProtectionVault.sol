@@ -97,16 +97,28 @@ contract AutoProtectionVault is ReentrancyGuard {
     }
 
     /// @notice Permissionless: anyone can ask Sentinel to liquidate this
-    ///         vault if its on-chain health factor is below 1. Used by the
-    ///         owner's frontend, by external keepers, or by the user's own
-    ///         off-chain monitor. The Coordinator's own checks will revert
-    ///         if the position is still healthy.
-    function requestSentinelProtection() external nonReentrant returns (uint256 caseId) {
+    ///         vault if its on-chain health factor is below 1. The caller
+    ///         supplies the Scorer prompt payload because the underlying
+    ///         Somnia base agent (currently `llm-inference`) expects an
+    ///         agent-specific ABI rather than a fixed Sentinel shape.
+    ///         Coordinator forwards the payload as-is.
+    /// @param scorerPayload Bytes already ABI-encoded for the configured
+    ///        Scorer agent. The off-chain helper in
+    ///        `packages/agents/src/prompts/scorer.ts` is the reference
+    ///        builder; any compatible bytes are accepted.
+    function requestSentinelProtection(
+        bytes calldata scorerPayload
+    )
+        external
+        nonReentrant
+        returns (uint256 caseId)
+    {
         caseId = coordinator.flagPosition(
             watcherAgentId,
             address(this),
             address(collateralAsset),
-            address(debtAsset)
+            address(debtAsset),
+            scorerPayload
         );
         emit SentinelProtectionRequested(caseId);
     }

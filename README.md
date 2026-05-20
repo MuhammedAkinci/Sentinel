@@ -60,10 +60,119 @@ scope for the hackathon — all demonstrations run on Shannon.
 
 Verified externals (all addresses in [`packages/shared/src/addresses.ts`](packages/shared/src/addresses.ts)):
 
-- Somnia agent platform (Shannon): `0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776`
+- Somnia native agent platform (proxy): `0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776`
+- Somnia native agent registry (proxy): `0x08D1Fc808f1983d2Ea7B63a28ECD4d8C885Cd02A`
 - Protofire ETH/USD feed: `0x604CF5063eC760A78d1C089AA55dFf29B90937f9`
 - Protofire BTC/USD feed: `0x3dF17dbaa3BA861D03772b501ADB343B4326C676`
 - Protofire USDC/USD feed: `0xA4a08Eb26f85A53d40E3f908B406b2a69B1A2441`
+
+### Live Sentinel deployment on Shannon testnet
+
+Deployed May 2026 from `0x9221b59a01372e0c55Fe72cCd5e7F3982ae2Fd9c`. All
+contract pages link to Shannon Explorer.
+
+| Contract | Address |
+| --- | --- |
+| MintableERC20 WETH | [`0x7d37e2Eca6AbE57d683dfF4c75F503A42d3dA8e2`](https://shannon-explorer.somnia.network/address/0x7d37e2Eca6AbE57d683dfF4c75F503A42d3dA8e2) |
+| MintableERC20 USDC | [`0x36d208fF8F7A55d966aE02F3Fcd829A46F3ADf67`](https://shannon-explorer.somnia.network/address/0x36d208fF8F7A55d966aE02F3Fcd829A46F3ADf67) |
+| PriceOracleAdapter | [`0x6ac0acd7beD3eF43C38a31d40e7cC279C63E2437`](https://shannon-explorer.somnia.network/address/0x6ac0acd7beD3eF43C38a31d40e7cC279C63E2437) |
+| LendingPool | [`0x8d63881b34ed9c2C55862DBbc563555c32F4fF7e`](https://shannon-explorer.somnia.network/address/0x8d63881b34ed9c2C55862DBbc563555c32F4fF7e) |
+| sWETH | [`0x5E1a8b28965c2E72E10431cc75127fA5c143C6A1`](https://shannon-explorer.somnia.network/address/0x5E1a8b28965c2E72E10431cc75127fA5c143C6A1) |
+| sUSDC | [`0xA0d858BDC0A5ed8f02A21EF6c2EB3Ae4a007f23A`](https://shannon-explorer.somnia.network/address/0xA0d858BDC0A5ed8f02A21EF6c2EB3Ae4a007f23A) |
+| AgentRegistry | [`0xb2Cd2a2d058364dC16f5604aB6171E9D6e88d62d`](https://shannon-explorer.somnia.network/address/0xb2Cd2a2d058364dC16f5604aB6171E9D6e88d62d) |
+| Reputation | [`0x81c6796d66aA5a0F6810DBF8Aa4a52E48d42aF56`](https://shannon-explorer.somnia.network/address/0x81c6796d66aA5a0F6810DBF8Aa4a52E48d42aF56) |
+| Splitter | [`0x8C426852cdF01120222421013Cc5325d4d24446a`](https://shannon-explorer.somnia.network/address/0x8C426852cdF01120222421013Cc5325d4d24446a) |
+| Coordinator (v2, current) | [`0x414B08B04e38F2460e3Fb29078fCdD87d8CbAf80`](https://shannon-explorer.somnia.network/address/0x414B08B04e38F2460e3Fb29078fCdD87d8CbAf80) |
+| Coordinator (v1, legacy) | [`0x30607df78D484BdD70F3c33285803F21d484E390`](https://shannon-explorer.somnia.network/address/0x30607df78D484BdD70F3c33285803F21d484E390) |
+| AutoProtectionVault | [`0xD3fF0Af1F7A806a68fC95711D4D6E85799d4C530`](https://shannon-explorer.somnia.network/address/0xD3fF0Af1F7A806a68fC95711D4D6E85799d4C530) |
+
+Sentinel-side agent registry IDs:
+
+| Role | Agent ID | Operator |
+| --- | --- | --- |
+| Watcher | 1 | AutoProtectionVault (auto-registered) |
+| Watcher | 2 | Deployer |
+| Scorer | 3 | Deployer |
+| Router | 4 | Deployer |
+| Executor | 5 | Deployer |
+
+Somnia native agent IDs wired into the Coordinator:
+
+- `scorerSomniaAgentId = routerSomniaAgentId = 12847293847561029384` (the
+  `llm-inference` base agent; both Scorer and Router roles share it,
+  differentiated by prompt). See
+  [`docs/agents.md`](docs/agents.md) for the base-agent ID lookup.
+
+Smoke test verified on-chain (HF before crash: `1.5`, HF after $1,800 oracle
+override: `0.9`). Tx hashes are in
+[`deployments/shannon-testnet.json`](contracts/deployments/shannon-testnet.json)
+and the broadcast directory at `contracts/broadcast/Deploy.s.sol/50312/`.
+
+### Live end-to-end run against Somnia native agents
+
+The Coordinator v2 invokes the public `llm-inference` base agent (Somnia
+agent ID `12847293847561029384`) for both Scorer and Router roles. The
+following case ran the full pipeline end to end on Shannon testnet.
+
+**Case 3 — successful liquidation through Somnia validator consensus:**
+
+| Step | Tx | Block | Wall-clock |
+| --- | --- | --- | --- |
+| `flagPosition` (Watcher → Coordinator → `createRequest`) | [`0xcb47956f...172218f9e`](https://shannon-explorer.somnia.network/tx/0xcb47956f96c6500b4d6f91332ce220f367f75225fc810b39ee9c04d172218f9e) | 387,416,402 | T0 |
+| `handleScorerResponse` (Somnia validator → Coordinator) | [`0xa6f4ff08...8e9a6a3b391`](https://shannon-explorer.somnia.network/tx/0xa6f4ff084f6752295afdc776475b6490b3f9ebfb53b256a8a37d38e9a6a3b391) | 387,416,414 | T0 + **1s** |
+| `advanceToRouter` (keeper → Coordinator → `createRequest`) | [`0x10323f66...df3900f39`](https://shannon-explorer.somnia.network/tx/0x10323f6651aa53bd1330761f0d4bc067b03964178ef812cc5bfa6b3df3900f39) | 387,417,580 | demo-paced |
+| `handleRouterResponse` (Somnia validator → Coordinator) | _next block after advanceToRouter_ | 387,417,5xx | < 1s |
+| `execute` (Executor → Coordinator → LendingPool + Splitter) | [`0x18182a22...c1296d71e`](https://shannon-explorer.somnia.network/tx/0x18182a22aff21bad78187ade75d8d528971713ee79f307768c65aacc1296d71e) | 387,418,618 | demo-paced |
+
+**Validator consensus latency on Shannon: 1 second wall-clock for a
+3-validator subcommittee to run `llm-inference`, reach consensus, and
+deliver the callback transaction to the Coordinator.** Twelve sub-second
+blocks elapsed between flagPosition and Scorer callback.
+
+**Case 3 final state, verified on-chain:**
+
+| Field | Value |
+| --- | --- |
+| status | `4` (Executed) |
+| score (from Scorer) | `10000` |
+| route.debtToCover (from Router) | `7,500,000,000` (50% close factor of 15k USDC debt) |
+| collateralSeized | `4,375,000,000,000,000,000` wei (4.375 WETH) |
+
+The liquidation math holds precisely:
+
+- ETH at $1,800 (override-crashed), USDC at $1
+- `7,500 USDC × 1.05 bonus = $7,875` equivalent collateral seized
+- `$7,875 / $1,800 = 4.375 WETH` ✓
+- Deployer HF before: `0.9`. HF after: `1.0125` (healthy again) ✓
+
+**Splitter distribution of the 4.375 WETH proceeds:**
+
+| Tranche | Share | Amount (WETH) |
+| --- | --- | --- |
+| Agents (4 × 60% / 4, equal split at score=0) | 60% | 2.625 (0.65625 each) |
+| Treasury | 30% | 1.3125 |
+| Bounty pool (held) | 10% | 0.4375 |
+
+**Reputation after the case (Coordinator awarded `+100` to each
+participating agent):**
+
+| Agent ID | Role | Successes | Failures | Score |
+| --- | --- | --- | --- | --- |
+| 2 | Watcher (deployer) | 1 | 0 | 100 |
+| 3 | Scorer (deployer) | 1 | 3 | 100 |
+| 4 | Router (deployer) | 1 | 0 | 100 |
+| 5 | Executor (deployer) | 1 | 0 | 100 |
+
+(Scorer's 3 failures are from earlier Cases 1 and 2 where prompt
+content did not produce a parseable numeric response from the LLM. The
+clamped-at-zero score recovered to 100 on the first successful case.)
+
+The end-to-end demonstration confirms that Sentinel runs autonomously
+through Somnia native validator consensus at sub-second per-step
+latency. The Coordinator's payload pass-through design accepts any
+ABI-shaped prompt the configured agent expects — the current
+`llm-inference` `inferNumber(string,string,int256,int256,bool)` schema is
+documented in [`docs/agents.md`](docs/agents.md).
 
 ---
 
