@@ -38,18 +38,30 @@ agent with role-specific prompts.
 
 ## Wire format
 
-The Coordinator's decoders are deliberately tight; any deviation from the
-exact byte length aborts the case with `InvalidScorePayload` or
-`InvalidRoutePayload`.
+The Coordinator is a payload pass-through: callers (the Watcher for the
+Scorer, and any keeper for the Router) build the bytes off-chain and the
+Coordinator forwards them verbatim to the configured Somnia base agent
+through `createRequest`. The decoders on the response side are
+deliberately tight; any deviation from the exact byte length aborts the
+case with `InvalidScorePayload` or `InvalidRoutePayload`.
 
-| Agent  | Payload (Coordinator → agent)                                     | Result (agent → Coordinator)            |
-| ------ | ----------------------------------------------------------------- | --------------------------------------- |
-| Scorer | `abi.encode(user, collateralAsset, debtAsset, healthFactor18)`    | `abi.encode(uint256 score)` — 32 bytes  |
-| Router | `abi.encode(user, collateralAsset, debtAsset, score, currentHF18)`| `abi.encode(uint256 debtToCover)` — 32 bytes |
+| Agent  | Payload (caller → Coordinator → agent)                                                       | Result (agent → Coordinator)                  |
+| ------ | -------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Scorer | `inferNumber(string prompt, string system, int256 0, int256 10000, bool false)` calldata     | `abi.encode(int256 score)` — 32 bytes; negatives revert |
+| Router | `inferNumber(string prompt, string system, int256 1, int256 closeFactorCap, bool false)` calldata | `abi.encode(int256 debtToCover)` — 32 bytes; negatives revert |
 
-Both responses are a single `uint256`. This matches `llm-inference`'s
-clamped-numeric output mode, which is the only structured output shape we
-can rely on from a base agent.
+Both responses are a single `int256` clamped by the agent into the range
+declared in the payload. The Coordinator decodes as `int256`, rejects
+negatives with `NegativeAgentResponse`, then casts to `uint256` for
+business logic. This matches `llm-inference`'s clamped-numeric output
+mode, which is the only structured output shape we can rely on from a
+base agent today.
+
+The selector for both payloads is
+`keccak256("inferNumber(string,string,int256,int256,bool)")[:4]`. The
+encoder lives in [packages/agents/src/prompts/payload.ts](../packages/agents/src/prompts/payload.ts)
+and is shared between the Watcher (for the Scorer flag) and any keeper
+that calls `advanceToRouter` (typically the same Watcher node).
 
 The Coordinator carries `collateralAsset` and `debtAsset` forward from the
 Watcher's original `flagPosition` call. Today's Router only chooses
@@ -244,17 +256,31 @@ Reputation, or LendingPool.
 
 ## Off-chain prompt builder
 
-The Watcher does not call `llm-inference` directly — only the on-chain
-Coordinator does. The prompt builder lives in the Coordinator's payload
-construction layer: `flagPosition` and `handleScorerResponse` both ABI-
-encode a tight argument list and ship it as the `payload` parameter of
-`createRequest`. The Somnia validator subcommittee receives the payload,
-expands it into the human-readable prompts above using a templating step
-inside the agent runtime, and returns the encoded numeric output.
+The Watcher constructs the Scorer payload off-chain at `flagPosition`
+time, and constructs the Router payload at `advanceToRouter` time. The
+Coordinator forwards both byte strings verbatim to `llm-inference` via
+`createRequest`. The validator subcommittee processes the call exactly as
+it would for any direct `inferNumber` invocation, then the Coordinator's
+callback decodes the clamped `int256` result.
 
-The templating step is the responsibility of the agent runtime
-configuration filed under the `scorerSomniaAgentId` / `routerSomniaAgentId`
-slots. Until Somnia opens custom agent registration, both slots point at
-`llm-inference` and the prompt templates live in this document — the
-runtime configuration that ships with our deployment will reference these
-templates verbatim.
+The on-chain Coordinator is therefore strictly an orchestration layer
+plus a tight result decoder. It does not know which template the prompt
+was rendered from; it only enforces that:
+
+1. The caller owns the agent ID claimed for the role (`AgentRegistry`).
+2. The position is below health-factor 1 (Watcher entry only).
+3. The result fits the expected 32-byte int256 shape.
+4. The decoded value is non-negative.
+
+That separation lets us roll forward to a richer Router (multi-collateral,
+DEX path, slippage budget) by changing the prompt and the response
+decoder without touching `flagPosition` or `advanceToRouter`. The Router
+roadmap section below describes the staged extension.
+
+The canonical prompt builders are in
+[packages/agents/src/prompts/](../packages/agents/src/prompts) and import
+[`loadPositionSnapshot`](../packages/agents/src/prompts/contextLoader.ts)
+to assemble the position context from live on-chain reads. Each Watcher
+node converges on the same payload bytes when looking at the same block,
+which is what allows the Somnia validator subcommittee to reach
+consensus on the response.
