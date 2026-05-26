@@ -53,4 +53,19 @@
       transition: none !important;
     }
   }
+
+  /* Pitch print route: framer-motion writes initial state (opacity: 0,
+     transforms) into inline styles on every motion.* element. The
+     screen snapshot and PDF export both want the composed layout, so
+     we force the final state with a rule strong enough to beat the
+     inline styles. Applied both on screen and in print. */
+  .print-deck *,
+  .print-deck *::before,
+  .print-deck *::after {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
 }
