@@ -24,7 +24,9 @@ export const metadata: Metadata = {
   description:
     "Sentinel is an autonomous liquidation and risk network on Somnia's Agentic L1. " +
     "Validator-consensus scoring and routing at sub-second latency.",
-  metadataBase: new URL("https://sentinel.ecc"),
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+  ),
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
