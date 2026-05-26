@@ -25,12 +25,23 @@ export const metadata: Metadata = {
     "Sentinel is an autonomous liquidation and risk network on Somnia's Agentic L1. " +
     "Validator-consensus scoring and routing at sub-second latency.",
   metadataBase: new URL("https://sentinel.ecc"),
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-16.png", sizes: "16x16", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
   openGraph: {
     title: "Sentinel",
     description:
       "Autonomous liquidation network on Somnia. Watching, never sleeping.",
     siteName: "Sentinel",
     type: "website",
+    images: [{ url: "/logo.png", width: 512, height: 512, alt: "Sentinel" }],
   },
 };
 
