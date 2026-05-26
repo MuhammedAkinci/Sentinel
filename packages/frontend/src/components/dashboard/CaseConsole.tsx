@@ -17,7 +17,7 @@ interface ActionResult {
   error?: string;
 }
 
-export function DemoControls() {
+export function CaseConsole() {
   const { address } = useAccount();
   const expectedDeployer = env.NEXT_PUBLIC_DEPLOYER_ADDRESS;
   const isConnected = !!address;
@@ -26,10 +26,10 @@ export function DemoControls() {
     !!expectedDeployer &&
     address.toLowerCase() === expectedDeployer.toLowerCase();
 
-  return <DemoControlsBody isConnected={isConnected} isDeployer={isDeployer} expectedDeployer={expectedDeployer} />;
+  return <CaseConsoleBody isConnected={isConnected} isDeployer={isDeployer} expectedDeployer={expectedDeployer} />;
 }
 
-function DemoControlsBody({
+function CaseConsoleBody({
   isConnected,
   isDeployer,
   expectedDeployer,
@@ -41,8 +41,8 @@ function DemoControlsBody({
   const [expanded, setExpanded] = useState(true);
   return (
     <Panel
-      title="Demo Controls"
-      subtitle="Drive a full Sentinel case end-to-end. Oracle setters and flagPosition require the deployer wallet; faucet mint plus deposit and borrow work for any account."
+      title="Case Console"
+      subtitle="Drive a full Sentinel case end-to-end. Oracle setters and flagPosition require the deployer wallet; faucet mint plus deposit, borrow, repay and withdraw work for any account."
       action={
         <button
           type="button"
@@ -59,7 +59,7 @@ function DemoControlsBody({
           <div className="border-b border-border bg-muted/40 px-5 py-4 text-xs leading-relaxed text-foreground/80">
             {!isConnected ? (
               <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-danger">
-                Connect a wallet to submit demo transactions.
+                Connect a wallet to submit case transactions.
               </p>
             ) : !isDeployer ? (
               <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-danger">
@@ -77,22 +77,25 @@ function DemoControlsBody({
             </p>
             <ol className="mt-2 list-decimal space-y-1 pl-5">
               <li>
-                <span className="text-foreground">Open Position</span>: reset oracle to $3,000, mint 10 WETH, deposit, borrow 15,000 USDC. Five signatures.
+                <span className="text-foreground">Open Position</span>: reset the WETH oracle to $3,000, mint 10 WETH from the faucet, approve, deposit, then borrow 15,000 USDC. Five sequential signatures.
               </li>
               <li>
-                <span className="text-foreground">Crash Oracle</span>: drop WETH to the price that pushes this account's HF to 0.85. Auto-computed from live state. The position is now liquidatable.
+                <span className="text-foreground">Crash Oracle</span>: drop the WETH price to the value that pushes this account's HF to 0.85. Auto-computed from live position state. The position becomes liquidatable.
               </li>
               <li>
-                <span className="text-foreground">Trigger flagPosition</span>: submit a docs-example llm-inference prompt. Coordinator dispatches a Somnia native createRequest; the Scored callback lands within seconds.
+                <span className="text-foreground">Trigger flagPosition</span>: submit the inferNumber prompt referenced in Somnia's llm-inference documentation. The Coordinator dispatches a Somnia native createRequest; the Scored callback lands within seconds.
               </li>
               <li>
-                <span className="text-foreground">Advance to Router</span>: push the latest Scored case forward. Coordinator dispatches a second createRequest; the Routed callback lands within seconds.
+                <span className="text-foreground">Advance to Router</span>: push the latest Scored case forward. The Coordinator dispatches a second createRequest; the Routed callback lands within seconds.
               </li>
               <li>
-                <span className="text-foreground">Execute</span>: settle the latest Routed case. LendingPool liquidation runs, collateral lands in the Splitter, and Reputation credits all four agents.
+                <span className="text-foreground">Execute</span>: settle the latest Routed case. LendingPool liquidation runs, the seized collateral lands in the Splitter, and Reputation credits all four participating agents.
               </li>
               <li>
-                <span className="text-foreground">Reset Oracle</span> when you want to start a fresh take.
+                <span className="text-foreground">Close Position</span> when you want to clear your outstanding debt and withdraw every unit of collateral - mints any USDC delta, approves, repays, then withdraws.
+              </li>
+              <li>
+                <span className="text-foreground">Reset Oracle</span> to put the WETH oracle back at $3,000 between runs.
               </li>
             </ol>
           </div>
@@ -102,6 +105,7 @@ function DemoControlsBody({
             <FlagPositionAction />
             <AdvanceToRouterAction />
             <ExecuteAction />
+            <ClosePositionAction />
             <ResetOracleAction />
           </div>
         </div>
@@ -195,7 +199,7 @@ function OpenPositionAction() {
       const healthyEthPrice = parseUnits("3000", 18);
 
       // The borrow only fits if ETH is at its healthy price. Reset the
-      // oracle first so any prior demo crash does not block the new
+      // oracle first so any prior price override does not block the new
       // position.
       await walletClient.writeContract({
         address: addresses.oracle,
@@ -278,14 +282,14 @@ function CrashOracleAction() {
       }
 
       // Aim for a clearly liquidatable HF that still leaves the position
-      // with enough collateral cushion for a meaningful demo settlement.
+      // with enough collateral cushion for a meaningful settlement.
       // 0.85 puts the Scorer in its high-confidence zone and lets the
       // Router pick the full close-factor cap.
       const TARGET_HF_18 = 850_000_000_000_000_000n;
       const raw = (currentPrice * TARGET_HF_18) / currentHf;
 
-      // Snap to the nearest $50 below the raw target. Clean narrative
-      // number for the demo while staying safely under the liquidation
+      // Snap to the nearest $50 below the raw target. Clean number for
+      // the displayed price while staying safely under the liquidation
       // threshold. Floor at $50 so a heavily-underwater position cannot
       // round to zero.
       const STEP = 50n * 10n ** 18n;
@@ -331,8 +335,134 @@ function ResetOracleAction() {
   return (
     <ActionCard
       title="Reset Oracle"
-      description="Restore WETH price to $3,000 between demo runs."
+      description="Restore the WETH oracle to $3,000 between runs."
       buttonLabel="Reset to $3,000"
+      state={state}
+      result={result}
+      onClick={onClick}
+    />
+  );
+}
+
+function ClosePositionAction() {
+  const { address } = useAccount();
+  const { data: walletClient } = useWalletClient();
+  const publicClient = usePublicClient();
+  const { state, result, run } = useAction();
+
+  const onClick = () =>
+    run(async () => {
+      if (!walletClient || !address) throw new Error("Wallet not ready.");
+      if (!publicClient) throw new Error("Public client not ready.");
+
+      // Read outstanding debt + collateral + USDC wallet balance so the
+      // close sequence can decide whether to top up via the faucet.
+      const debt = (await publicClient.readContract({
+        address: addresses.pool,
+        abi: lendingPoolAbi,
+        functionName: "debtOf",
+        args: [address, addresses.usdc],
+      })) as bigint;
+
+      const reserveConfig = (await publicClient.readContract({
+        address: addresses.pool,
+        abi: lendingPoolAbi,
+        functionName: "reserveConfig",
+        args: [addresses.weth],
+      })) as { sToken: `0x${string}` };
+
+      const [collateral, walletUsdc] = await Promise.all([
+        publicClient.readContract({
+          address: reserveConfig.sToken,
+          abi: mintableErc20Abi,
+          functionName: "balanceOf",
+          args: [address],
+        }) as Promise<bigint>,
+        publicClient.readContract({
+          address: addresses.usdc,
+          abi: mintableErc20Abi,
+          functionName: "balanceOf",
+          args: [address],
+        }) as Promise<bigint>,
+      ]);
+
+      if (debt === 0n && collateral === 0n) {
+        throw new Error("Nothing to close - no debt and no collateral.");
+      }
+
+      // Each step in the close sequence reads on-chain state set by the
+      // previous step (the repay must land before the withdraw passes
+      // LendingPool's solvency post-check). Submitting them back to
+      // back without waiting risks the withdraw racing ahead of the
+      // repay, so we await every receipt.
+      const submitAndWait = async (
+        request: Parameters<typeof walletClient.writeContract>[0],
+      ): Promise<`0x${string}`> => {
+        const hash = await walletClient.writeContract(request);
+        await publicClient.waitForTransactionReceipt({ hash });
+        return hash;
+      };
+
+      let lastHash: `0x${string}` | null = null;
+
+      if (debt > 0n) {
+        // Top up USDC from the faucet if the wallet does not hold
+        // enough to clear the debt. The faucet ERC20 has a configured
+        // mint cap that comfortably exceeds any single test position.
+        if (walletUsdc < debt) {
+          const shortfall = debt - walletUsdc;
+          lastHash = await submitAndWait({
+            address: addresses.usdc,
+            abi: mintableErc20Abi,
+            functionName: "mint",
+            args: [address, shortfall],
+            account: address,
+            chain: walletClient.chain ?? null,
+          });
+        }
+        lastHash = await submitAndWait({
+          address: addresses.usdc,
+          abi: mintableErc20Abi,
+          functionName: "approve",
+          args: [addresses.pool, debt],
+          account: address,
+          chain: walletClient.chain ?? null,
+        });
+        lastHash = await submitAndWait({
+          address: addresses.pool,
+          abi: lendingPoolAbi,
+          functionName: "repay",
+          // The pool's repay takes (asset, amount, onBehalfOf). The
+          // caller is closing their own position, so onBehalfOf is the
+          // connected wallet.
+          args: [addresses.usdc, debt, address],
+          account: address,
+          chain: walletClient.chain ?? null,
+        });
+      }
+
+      if (collateral > 0n) {
+        lastHash = await submitAndWait({
+          address: addresses.pool,
+          abi: lendingPoolAbi,
+          functionName: "withdraw",
+          args: [addresses.weth, collateral],
+          account: address,
+          chain: walletClient.chain ?? null,
+        });
+      }
+
+      if (!lastHash) {
+        throw new Error("Nothing to close.");
+      }
+      return lastHash;
+    });
+
+  return (
+    <ActionCard
+      title="Close Position"
+      description="Repay all USDC debt and withdraw every unit of WETH collateral. Auto-mints any USDC delta from the faucet so the close always succeeds. Up to four signatures."
+      buttonLabel="Close Position"
       state={state}
       result={result}
       onClick={onClick}
@@ -391,8 +521,10 @@ function FlagPositionAction() {
     run(async () => {
       if (!walletClient || !address) throw new Error("Wallet not ready.");
 
-      // Build the same llm-inference inferNumber payload the docs example
-      // uses. Returns score 10000 reliably.
+      // Build the verbatim inferNumber payload from Somnia's llm-inference
+      // documentation. The clamped-numeric output mode returns 10000
+      // reliably for this prompt - high enough to clear the Coordinator's
+      // scoreThreshold without any prompt drift.
       const sentimentPrompt = "Wonderful day, beautiful weather, everyone happy.";
       const sentimentSystem = "Rate sentiment from 0 (very negative) to 10000 (very positive).";
       const inferNumberSig = "inferNumber(string,string,int256,int256,bool)";
@@ -424,7 +556,7 @@ function FlagPositionAction() {
   return (
     <ActionCard
       title="Trigger flagPosition"
-      description="Submit a docs-example llm-inference prompt with watcherAgentId=2. Expect a Scored callback within seconds."
+      description="Submit the verbatim inferNumber prompt from Somnia's llm-inference docs with watcherAgentId=2. Expect a Scored callback within seconds."
       buttonLabel="Flag Position"
       state={state}
       result={result}
