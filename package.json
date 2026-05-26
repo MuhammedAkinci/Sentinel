@@ -17,7 +17,9 @@
     "test": "npm run test --workspaces --if-present",
     "contracts:build": "forge build --root contracts",
     "contracts:test": "forge test --root contracts -vvv",
-    "contracts:fmt": "forge fmt --root contracts"
+    "contracts:fmt": "forge fmt --root contracts",
+    "frontend:dev": "npm run dev -w @sentinel/frontend",
+    "frontend:build": "npm run build -w @sentinel/frontend"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
