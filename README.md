@@ -5,8 +5,6 @@ agents (validator-consensus inference) and off-chain runtime processes,
 coordinated on-chain through a registry, reputation, and payment-splitting
 contract layer.
 
-Built for the **Somnia Agentathon** (May 20 – June 11, 2026, Encode Club).
-
 ---
 
 ## Architecture
