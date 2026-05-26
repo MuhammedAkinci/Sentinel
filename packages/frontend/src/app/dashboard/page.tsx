@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import type { Address } from "viem";
 
 import { DashboardHeader } from "~/components/dashboard/DashboardHeader";
 import { ActivePositions } from "~/components/dashboard/ActivePositions";
@@ -50,10 +51,42 @@ export default function DashboardPage() {
   const { events, status } = useContractEvents({
     sources,
     buffer: 200,
-    bootstrapChunks: 4,
+    // 30 chunks × 1000 blocks = ~30 000 blocks (~3 h on Shannon). Wide enough
+    // that a hard refresh after an extended demo session rehydrates the full
+    // event arc without needing to replay any transactions.
+    bootstrapChunks: 30,
   });
 
   const activeRoles = useMemo(() => rolesFromEvents(events), [events]);
+
+  // Feed every borrower seen over WSS straight into the active-positions
+  // discovery set so a freshly opened position appears without waiting
+  // for the next 8-second log re-scan.
+  const liveBorrowers = useMemo<ReadonlyArray<Address>>(() => {
+    const seen = new Set<Address>();
+    for (const event of events) {
+      if (event.kind !== "Borrow") continue;
+      const user = event.args.user as Address | undefined;
+      if (user) seen.add(user);
+    }
+    return Array.from(seen);
+  }, [events]);
+
+  // Derive refresh triggers from the unified event stream so the
+  // dependent panels re-fetch within the same tick a relevant event
+  // lands over WSS. Counting is cheap and the count strictly
+  // increases, which makes it a clean useEffect dependency.
+  const reputationTick = useMemo(
+    () =>
+      events.filter(
+        (e) => e.kind === "SuccessRecorded" || e.kind === "FailureRecorded",
+      ).length,
+    [events],
+  );
+  const executedTick = useMemo(
+    () => events.filter((e) => e.kind === "Executed").length,
+    [events],
+  );
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -64,10 +97,10 @@ export default function DashboardPage() {
 
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="flex flex-col gap-6 lg:col-span-8">
-            <ActivePositions />
+            <ActivePositions extraUsers={liveBorrowers} />
             <AgentDebate events={events} />
-            <AgentReputation />
-            <RecentLiquidations />
+            <AgentReputation refreshTick={reputationTick} />
+            <RecentLiquidations refreshTick={executedTick} />
             <DemoControls />
           </div>
           <aside className="lg:col-span-4">
