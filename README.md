@@ -195,16 +195,23 @@ sentinel/
 └── docs/                                   Architecture notes, open questions
 ```
 
-`packages/agents/` and `packages/frontend/` will be added when the contracts
-they depend on exist. No empty placeholder packages — each one carries real
-code on day one.
+```
+sentinel/
+├── contracts/                Foundry workspace (Solidity 0.8.28)
+├── packages/
+│   ├── agents/               Off-chain Watcher + Executor TypeScript runtime
+│   ├── frontend/             Next.js 14 dashboard + landing
+│   └── shared/               Chains, addresses, env validation
+├── scripts/                  Smoke + Sentinel configuration shell scripts
+└── docs/                     Architecture notes, agent wire format
+```
 
 ---
 
 ## Toolchain
 
-- Node.js ≥ 22 (developed against v25)
-- Foundry (forge ≥ 1.5)
+- Node.js >= 22 (developed against v25)
+- Foundry (forge >= 1.5)
 - npm workspaces (no pnpm dependency)
 
 ```bash
@@ -213,7 +220,55 @@ npm run contracts:build      # forge build
 npm run contracts:test       # forge test -vvv
 npm run typecheck            # tsc -p across all packages
 npm test                     # vitest across off-chain packages
+npm run frontend:dev         # next dev (packages/frontend, port 3000)
+npm run frontend:build       # next build (verifies the bundle)
 ```
+
+### Running the off-chain agents
+
+Both agent processes read their configuration from `.env` (see
+`.env.example`) and assume the Coordinator + LendingPool addresses are
+populated from the deployment script's env-paste block.
+
+```bash
+npm run -w @sentinel/agents watcher     # WSS-bootstrapped Watcher loop
+npm run -w @sentinel/agents executor    # Routed-event-driven Executor loop
+```
+
+The Watcher does three things autonomously:
+
+1. Replays LendingPool events in chunked 1000-block windows (Shannon's
+   eth_getLogs cap) to rebuild the active-borrower set on startup.
+2. Polls `lendingPool.healthFactor` for every active borrower at
+   `WATCHER_POLL_INTERVAL_MS` and calls `Coordinator.flagPosition` with
+   a freshly built `inferNumber(...)` Scorer payload whenever a
+   position drops below `WATCHER_HEALTH_THRESHOLD`.
+3. Subscribes to the Coordinator's `Scored` event over WSS; for every
+   case the Watcher itself initiated, it rebuilds the position snapshot
+   at Routing time, encodes the Router payload (close-factor-capped),
+   and calls `Coordinator.advanceToRouter`.
+
+The Executor subscribes to the `Routed` event and runs
+`Coordinator.execute(caseId, executorAgentId)`. Wrong-status reverts
+(another Executor settled first) are skipped without halting the loop.
+
+### Frontend
+
+`packages/frontend/` is a Next.js 14 application with two routes:
+
+- `/` — landing page with the FaultyTerminal hero, live metrics pulled
+  from the Coordinator, a three-step pipeline explainer with verified
+  Solidity snippets, and the on-chain architecture index.
+- `/dashboard` — operational dashboard rendering live LendingPool
+  positions, an aggregated WSS event stream across Coordinator /
+  LendingPool / Reputation / Splitter, agent reputation with bars,
+  recent liquidations with flag → execute latency, and a deployer-gated
+  Demo Controls panel for recorded demos.
+
+Copy `packages/frontend/.env.local.example` to
+`packages/frontend/.env.local` and fill in
+`NEXT_PUBLIC_DEPLOYER_ADDRESS` plus any updated SENTINEL_* addresses
+when the deployment moves.
 
 ### Deploying
 
@@ -237,22 +292,19 @@ for later programmatic consumption.
 
 ---
 
-## Open questions
+## Custom agent migration path
 
-1. **Custom agent registration on Somnia.** Confirmed by Somnia DevRel
-   (May 2026): custom agent registration is not yet active. Sentinel
-   therefore points both the Scorer and Router agent IDs at the public
-   `llm-inference` base agent, configured through the prompts defined in
-   [`docs/agents.md`](docs/agents.md). The Coordinator's
-   `scorerSomniaAgentId` and `routerSomniaAgentId` slots are owner-
-   settable, so the migration to a future custom agent is a single
-   transaction with no contract upgrade.
+Confirmed by Somnia DevRel (May 2026): custom agent registration is not
+yet active on the Agentic L1. Sentinel therefore points both the
+Scorer and Router agent IDs at the public `llm-inference` base agent,
+configured through the prompts defined in
+[`docs/agents.md`](docs/agents.md) and built off-chain by the Watcher in
+[packages/agents/src/prompts/](packages/agents/src/prompts/).
 
-2. **Agentathon judging weights.** We assume equal weighting across the four
-   public criteria (Functionality, Agent-First Design, Innovation and
-   Technical Creativity, Autonomous Performance). The official source page
-   (`encode.club/somnia-agentathon`) did not expose detail through public
-   scraping; re-verify before final submission.
+The Coordinator's `scorerSomniaAgentId` and `routerSomniaAgentId` slots
+are owner-settable, so swapping in a custom agent in the future is a
+single transaction with no contract upgrade and no Watcher / Executor
+binary change.
 
 ---
 
@@ -289,16 +341,20 @@ for later programmatic consumption.
     (reputation-weighted, equal-split fallback when no scores exist),
     treasury, and a held bounty pool. Asset-agnostic — tracks owed
     balances per (token, account).
-  - `Coordinator` — on-chain orchestrator. Watcher flags a position;
-    Coordinator submits two real `ISomniaAgents.createRequest` calls
-    (Scorer then Router) with on-chain native deposit; callbacks advance
-    a state machine (`None → Flagged → Scored → Routed → Executed |
-    Cancelled`); Executor runs the liquidation, Coordinator transfers
-    seized collateral to the Splitter, and reputation is credited to all
-    four participating agents. Scorer and Router agent IDs are split into
-    Somnia-native and Sentinel-registry pairs, both owner-settable so we
-    can swap between the public `llm-inference` base agent and our own
-    custom registered agents without redeploying.
+  - `Coordinator` - on-chain orchestrator. A payload pass-through: the
+    Watcher constructs the Scorer payload bytes off-chain and the
+    Coordinator forwards them verbatim through
+    `ISomniaAgents.createRequest`. The Scorer callback transitions the
+    case to `Scored` and emits an event; an off-chain keeper (the
+    Watcher in our deployment) then calls `advanceToRouter(caseId, routerPayload)`
+    to issue the Router request. State machine:
+    `None -> Flagged -> Scored -> Routed -> Executed | Cancelled`.
+    Executor runs the liquidation, Coordinator transfers seized
+    collateral to the Splitter, and reputation is credited to all four
+    participating agents. Scorer and Router agent IDs are split into
+    Somnia-native and Sentinel-registry pairs, both owner-settable so
+    we can swap between the public `llm-inference` base agent and our
+    own custom registered agents without redeploying.
   - `AutoProtectionVault` — minimal third-party consumer that wraps a
     single user's lending position. The vault auto-registers itself as a
     Watcher in its constructor and exposes a permissionless
@@ -312,32 +368,40 @@ for later programmatic consumption.
   full address bundle to `./deployments/<chain>.json`; the pure
   `deployAll(DeploymentConfig)` entry is exercised by an in-VM test.
 - **Off-chain agent runtime (`packages/agents/`):**
-  - `Watcher` — bootstraps in-memory position state by replaying the
-    LendingPool event history, subscribes to live deposit / withdraw /
+  - `Watcher` - bootstraps in-memory position state by chunk-replaying
+    the LendingPool event history (1000 blocks per call to stay under
+    Shannon's eth_getLogs cap), subscribes to live deposit / withdraw /
     borrow / repay / liquidation events over WSS, and on a configurable
     poll interval calls `lendingPool.healthFactor` for every active
     borrower. Positions whose HF drops below
     `WATCHER_HEALTH_THRESHOLD` (default 1.05) are flagged through
-    `Coordinator.flagPosition`, with a per-user cooldown to prevent
-    duplicate flags during a single scoring window. Every revert path
-    is simulated first so failures surface as typed errors before
-    spending gas.
-  - `Executor` — subscribes to the Coordinator's `Routed` event and
+    `Coordinator.flagPosition` with a freshly built `inferNumber(...)`
+    Scorer payload that encodes a deterministic prompt built from the
+    on-chain position snapshot. Per-user cooldown prevents duplicate
+    flags during a scoring window. Every revert path is simulated
+    first so failures surface as typed errors before spending gas. The
+    Watcher also subscribes to the Coordinator's `Scored` event over
+    WSS; for every case it initiated, it rebuilds the snapshot at
+    Routing time, encodes the close-factor-capped Router payload, and
+    calls `Coordinator.advanceToRouter`. The Watcher therefore drives
+    the full Flagged -> Scored -> Routed transition autonomously.
+  - `Executor` - subscribes to the Coordinator's `Routed` event and
     runs `Coordinator.execute(caseId, executorAgentId)`. Wrong-status
     reverts (typically another Executor already settled the case) are
     logged and skipped without halting the loop. Past-but-unsettled
-    Routed events are replayed on startup.
-  - `prompts/` — deterministic Scorer and Router prompt builders that
-    implement `docs/agents.md` verbatim, plus a `contextLoader`
-    that pulls reserve config, balances, prices, symbols, and the
-    on-chain health factor through viem reads to populate the
-    builders' input snapshot. Useful for shadow validation today
-    and as the reference implementation once Somnia opens custom
-    agent registration.
+    Routed events are replayed on startup in 1000-block chunks.
+  - `prompts/` - deterministic Scorer and Router prompt builders that
+    implement `docs/agents.md` verbatim, a payload encoder that wraps
+    them in the `llm-inference` base agent's
+    `inferNumber(string,string,int256,int256,bool)` ABI, plus a
+    `contextLoader` that pulls reserve config, balances, prices,
+    symbols, and the on-chain health factor through viem reads to
+    populate the builders' input snapshot. Shared by the Watcher's
+    flag path and Router-advance path.
   - Both processes share `@sentinel/shared` for chain configuration,
     deployment addresses, and zod-validated env loading. Strict
     TypeScript end to end; no `any` in application code.
-- **118 tests passing in total**:
+- **126 tests passing in total**:
   - 94 Foundry tests (LendingPool 27, AgentRegistry 16, Reputation 8,
     Splitter 13, Coordinator 18, AutoProtectionVault 9, Deploy 3).
     The Coordinator suite covers the full end-to-end flow including
@@ -345,8 +409,9 @@ for later programmatic consumption.
     with selector and agent-ID prefix matching, no mock contract
     deployed) and validator callbacks (delivered via
     `vm.prank(somniaPlatform)`).
-  - 24 Vitest tests for the agent runtime
-    (PositionTracker 9, HealthMonitor 5, ScorerPrompt 5, RouterPrompt 5).
+  - 32 Vitest tests for the agent runtime
+    (PositionTracker 9, HealthMonitor 5, ScorerPrompt 5, RouterPrompt 5,
+    Payload encoder 8 - selector parity, prompt round-trip, close-factor cap).
 
 ## Agent specifications
 
@@ -391,9 +456,11 @@ exact byte layout of each stage.
 
 In order:
 
-1. Frontend dashboard.
-2. Anvil-fork integration tests for the agent runtime that exercise the
+1. Anvil-fork integration tests for the agent runtime that exercise the
    full Watcher / Coordinator / Executor handshake without a live Somnia
    connection.
-3. Router roadmap stage 2 (multi-collateral selection) once the demo flow
+2. Router roadmap stage 2 (multi-collateral selection) once the demo flow
    is recorded.
+3. Cut over from `llm-inference` to a Sentinel-registered custom agent
+   once Somnia opens custom agent registration. Single `setScorerSomniaAgentId` /
+   `setRouterSomniaAgentId` transaction, no redeploys.
