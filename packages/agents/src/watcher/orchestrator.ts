@@ -1,16 +1,24 @@
 import {
   type Address,
   type Hash,
+  type Hex,
+  type Log,
   type PublicClient,
   type WalletClient,
   ContractFunctionRevertedError,
   BaseError,
+  decodeEventLog,
 } from "viem";
 import type { Logger } from "pino";
 
 import { lendingPoolAbi, coordinatorAbi } from "../core/abis.js";
 import { PositionTracker, type PositionEvent } from "./positionTracker.js";
 import { HealthMonitor } from "./healthMonitor.js";
+import {
+  loadPositionSnapshot,
+  encodeScorerPayload,
+  encodeRouterPayload,
+} from "../prompts/index.js";
 
 export interface WatcherDependencies {
   readClient: PublicClient;
@@ -28,16 +36,30 @@ export interface WatcherConfig {
   startBlock: bigint;
   /** Minimum gap, in milliseconds, before the same user can be re-flagged. */
   flagCooldownMs?: number;
+  /** Block window per eth_getLogs chunk. Shannon caps at 1000. */
+  scanChunkSize?: bigint;
+}
+
+interface CaseContext {
+  caseId: bigint;
+  user: Address;
+  collateralAsset: Address;
+  debtAsset: Address;
 }
 
 /**
  * Top-level Watcher loop.
  *
  * Lifecycle:
- *   1. Bootstrap historical state from `startBlock` up to the chain head.
+ *   1. Bootstrap historical state from `startBlock` up to the chain head
+ *      by chunking eth_getLogs into Shannon-safe 1000-block windows.
  *   2. Subscribe via WSS to incoming events; keep the tracker in sync.
  *   3. Every `pollIntervalMs`, scan active borrowers; for each whose HF
- *      drops below `threshold`, call Coordinator.flagPosition.
+ *      drops below `threshold`, build the on-chain Scorer payload from
+ *      live state and call `Coordinator.flagPosition`.
+ *   4. Listen for `Scored` callbacks on cases the Watcher initiated; for
+ *      each one, refresh the snapshot, build the Router payload, and
+ *      submit `Coordinator.advanceToRouter`.
  *
  * Returns an async stop() handle.
  */
@@ -52,28 +74,57 @@ export async function startWatcher(
     threshold: cfg.threshold,
   });
   const cooldownMs = cfg.flagCooldownMs ?? 60_000;
+  const chunkSize = cfg.scanChunkSize ?? 1_000n;
   const lastFlaggedAt = new Map<Address, number>();
+  const pendingCases = new Map<bigint, CaseContext>();
 
   // 1. Bootstrap.
   const head = await deps.readClient.getBlockNumber();
-  log.info({ fromBlock: cfg.startBlock.toString(), toBlock: head.toString() }, "bootstrap: replaying lending events");
-  const historical = await fetchHistoricalEvents(deps.readClient, cfg.lendingPool, cfg.startBlock, head);
+  log.info(
+    { fromBlock: cfg.startBlock.toString(), toBlock: head.toString(), chunkSize: chunkSize.toString() },
+    "bootstrap: replaying lending events",
+  );
+  const historical = await fetchHistoricalEvents(
+    deps.readClient,
+    cfg.lendingPool,
+    cfg.startBlock,
+    head,
+    chunkSize,
+  );
   tracker.applyAll(historical);
-  log.info({ events: historical.length, borrowers: tracker.activeBorrowers().length }, "bootstrap complete");
+  log.info(
+    { events: historical.length, borrowers: tracker.activeBorrowers().length },
+    "bootstrap complete",
+  );
 
-  // 2. Live subscription.
-  const unwatchers: Array<() => void> = subscribeLive(deps.wssClient, cfg.lendingPool, tracker, log);
+  // 2. Live lending subscription.
+  const lendingUnwatch: Array<() => void> = subscribeLending(
+    deps.wssClient,
+    cfg.lendingPool,
+    tracker,
+    log,
+  );
 
-  // 3. Periodic HF scan.
+  // 3. Coordinator Scored subscription - completes the pipeline by
+  //    advancing every case the Watcher flagged into the Router stage.
+  const coordinatorUnwatch = subscribeScored(
+    deps,
+    cfg,
+    pendingCases,
+    log,
+  );
+
+  // 4. Periodic HF scan.
   const stopped = { value: false };
   const tickHandle = setInterval(() => {
-    void tick(deps, cfg, tracker, monitor, lastFlaggedAt, cooldownMs, log, stopped);
+    void tick(deps, cfg, tracker, monitor, lastFlaggedAt, pendingCases, cooldownMs, log, stopped);
   }, cfg.pollIntervalMs);
 
   const stop = async (): Promise<void> => {
     stopped.value = true;
     clearInterval(tickHandle);
-    for (const u of unwatchers) u();
+    for (const u of lendingUnwatch) u();
+    coordinatorUnwatch();
   };
 
   return { stop, tracker };
@@ -86,26 +137,38 @@ async function fetchHistoricalEvents(
   lendingPool: Address,
   fromBlock: bigint,
   toBlock: bigint,
+  chunkSize: bigint,
 ): Promise<PositionEvent[]> {
   const eventNames = ["Deposit", "Withdraw", "Borrow", "Repay", "Liquidation"] as const;
   const all: PositionEvent[] = [];
 
-  for (const name of eventNames) {
-    const logs = await client.getContractEvents({
-      address: lendingPool,
-      abi: lendingPoolAbi,
-      eventName: name,
-      fromBlock,
-      toBlock,
-    });
-    for (const l of logs) {
-      const decoded = decodeLog(l as unknown as DecodedLog, name);
-      if (decoded) all.push(decoded);
+  let cursorTo = toBlock;
+  while (cursorTo >= fromBlock) {
+    const cursorFromCandidate = cursorTo - chunkSize + 1n;
+    const cursorFrom = cursorFromCandidate < fromBlock ? fromBlock : cursorFromCandidate;
+    for (const name of eventNames) {
+      try {
+        const logs = await client.getContractEvents({
+          address: lendingPool,
+          abi: lendingPoolAbi,
+          eventName: name,
+          fromBlock: cursorFrom,
+          toBlock: cursorTo,
+        });
+        for (const l of logs) {
+          const decoded = decodeLendingLog(l as unknown as DecodedLog, name);
+          if (decoded) all.push(decoded);
+        }
+      } catch {
+        // A single bad chunk should not bring down the bootstrap;
+        // the live subscription still catches up missed state once
+        // a new event lands.
+      }
     }
+    if (cursorFrom === fromBlock) break;
+    cursorTo = cursorFrom - 1n;
   }
 
-  // Sort chronologically so the tracker reflects the same ordering the
-  // chain executed.
   all.sort((a, b) => sortKey(a) - sortKey(b));
   return all;
 }
@@ -118,16 +181,12 @@ interface DecodedLog {
 }
 
 function sortKey(_event: PositionEvent): number {
-  // Sort key is approximated by encounter order from the per-event-name
-  // log scans above. Since we iterate event names sequentially, exact
-  // intra-block ordering is preserved within each event name. For our
-  // purposes the bootstrap only needs to converge on the same final
-  // balances as the chain, which is achieved by all add/sub being
-  // commutative across event types.
+  // All position events are add/sub on the same per-user counters, so
+  // order across kinds is commutative for arrival-on-tracker correctness.
   return 0;
 }
 
-function decodeLog(log: DecodedLog, eventName: string): PositionEvent | null {
+function decodeLendingLog(log: DecodedLog, eventName: string): PositionEvent | null {
   const a = log.args;
   switch (eventName) {
     case "Deposit":
@@ -174,7 +233,7 @@ function decodeLog(log: DecodedLog, eventName: string): PositionEvent | null {
 
 /* ---------------------------- Subscriptions --------------------------- */
 
-function subscribeLive(
+function subscribeLending(
   client: PublicClient,
   lendingPool: Address,
   tracker: PositionTracker,
@@ -188,7 +247,7 @@ function subscribeLive(
       eventName: name,
       onLogs: (logs) => {
         for (const raw of logs) {
-          const decoded = decodeLog(raw as unknown as DecodedLog, name);
+          const decoded = decodeLendingLog(raw as unknown as DecodedLog, name);
           if (!decoded) continue;
           tracker.apply(decoded);
           log.debug({ event: name, user: decoded.user }, "applied live event");
@@ -199,6 +258,34 @@ function subscribeLive(
   );
 }
 
+function subscribeScored(
+  deps: WatcherDependencies,
+  cfg: WatcherConfig,
+  pendingCases: Map<bigint, CaseContext>,
+  log: Logger,
+): () => void {
+  return deps.wssClient.watchContractEvent({
+    address: cfg.coordinator,
+    abi: coordinatorAbi,
+    eventName: "Scored",
+    onLogs: (logs) => {
+      for (const raw of logs) {
+        const args = (raw as unknown as { args: Record<string, unknown> }).args;
+        const caseId = args.caseId as bigint | undefined;
+        const score = args.score as bigint | undefined;
+        if (caseId === undefined || score === undefined) continue;
+
+        const ctx = pendingCases.get(caseId);
+        if (!ctx) continue;
+        pendingCases.delete(caseId);
+
+        void advance(deps, cfg, ctx, score, log);
+      }
+    },
+    onError: (err) => log.error({ err }, "Scored subscription error"),
+  });
+}
+
 /* ----------------------------- Scan tick ------------------------------ */
 
 async function tick(
@@ -207,6 +294,7 @@ async function tick(
   tracker: PositionTracker,
   monitor: HealthMonitor,
   lastFlaggedAt: Map<Address, number>,
+  pendingCases: Map<bigint, CaseContext>,
   cooldownMs: number,
   log: Logger,
   stopped: { value: boolean },
@@ -232,10 +320,20 @@ async function tick(
     }
 
     try {
-      const hash = await flag(deps, cfg, a.user, collateral, debt);
+      const { hash, caseId } = await flag(deps, cfg, a.user, collateral, debt);
       lastFlaggedAt.set(a.user, now);
+      if (caseId !== null) {
+        pendingCases.set(caseId, { caseId, user: a.user, collateralAsset: collateral, debtAsset: debt });
+      }
       log.info(
-        { user: a.user, hf: a.healthFactor.toString(), txHash: hash, collateral, debt },
+        {
+          user: a.user,
+          hf: a.healthFactor.toString(),
+          txHash: hash,
+          caseId: caseId === null ? "unknown" : caseId.toString(),
+          collateral,
+          debt,
+        },
         "flagged position",
       );
     } catch (err) {
@@ -244,43 +342,140 @@ async function tick(
   }
 }
 
+/* ----------------------------- Tx submitters --------------------------- */
+
 async function flag(
   deps: WatcherDependencies,
   cfg: WatcherConfig,
   user: Address,
   collateralAsset: Address,
   debtAsset: Address,
-): Promise<Hash> {
-  // Simulate first so reverts surface as typed errors instead of stuck txs.
+): Promise<{ hash: Hash; caseId: bigint | null }> {
+  if (!deps.walletClient.account) {
+    throw new Error("walletClient has no account configured");
+  }
+
+  // Build the real Scorer payload from live on-chain state. The prompt
+  // is deterministic with respect to the position snapshot, so every
+  // Watcher node converges on the same byte payload when looking at
+  // the same block height.
+  const snapshot = await loadPositionSnapshot(deps.readClient, {
+    lendingPool: cfg.lendingPool,
+    user,
+    collateralAsset,
+    debtAsset,
+  });
+  const scorerPayload = encodeScorerPayload(snapshot);
+
+  // Simulate first so reverts surface as typed errors before we
+  // burn gas on a doomed transaction.
   try {
     await deps.readClient.simulateContract({
       address: cfg.coordinator,
       abi: coordinatorAbi,
       functionName: "flagPosition",
-      args: [cfg.watcherAgentId, user, collateralAsset, debtAsset],
-      account: deps.walletClient.account ?? null,
+      args: [cfg.watcherAgentId, user, collateralAsset, debtAsset, scorerPayload],
+      account: deps.walletClient.account,
     });
   } catch (err) {
-    if (err instanceof BaseError) {
-      const cause = err.walk((e) => e instanceof ContractFunctionRevertedError);
-      if (cause instanceof ContractFunctionRevertedError) {
-        // Re-throw with the decoded reason already in place.
-        throw cause;
-      }
-    }
-    throw err;
+    rethrowDecoded(err);
   }
 
-  if (!deps.walletClient.account) {
-    throw new Error("walletClient has no account configured");
-  }
-
-  return deps.walletClient.writeContract({
+  const hash = await deps.walletClient.writeContract({
     address: cfg.coordinator,
     abi: coordinatorAbi,
     functionName: "flagPosition",
-    args: [cfg.watcherAgentId, user, collateralAsset, debtAsset],
+    args: [cfg.watcherAgentId, user, collateralAsset, debtAsset, scorerPayload],
     account: deps.walletClient.account,
     chain: deps.walletClient.chain,
   });
+
+  const caseId = await extractCaseId(deps.readClient, hash);
+  return { hash, caseId };
+}
+
+async function advance(
+  deps: WatcherDependencies,
+  cfg: WatcherConfig,
+  ctx: CaseContext,
+  score: bigint,
+  log: Logger,
+): Promise<void> {
+  if (!deps.walletClient.account) {
+    log.error("walletClient has no account; cannot advance to router");
+    return;
+  }
+
+  try {
+    const snapshot = await loadPositionSnapshot(deps.readClient, {
+      lendingPool: cfg.lendingPool,
+      user: ctx.user,
+      collateralAsset: ctx.collateralAsset,
+      debtAsset: ctx.debtAsset,
+    });
+    const routerPayload: Hex = encodeRouterPayload({ ...snapshot, score });
+
+    try {
+      await deps.readClient.simulateContract({
+        address: cfg.coordinator,
+        abi: coordinatorAbi,
+        functionName: "advanceToRouter",
+        args: [ctx.caseId, routerPayload],
+        account: deps.walletClient.account,
+      });
+    } catch (err) {
+      rethrowDecoded(err);
+    }
+
+    const hash = await deps.walletClient.writeContract({
+      address: cfg.coordinator,
+      abi: coordinatorAbi,
+      functionName: "advanceToRouter",
+      args: [ctx.caseId, routerPayload],
+      account: deps.walletClient.account,
+      chain: deps.walletClient.chain,
+    });
+
+    log.info({ caseId: ctx.caseId.toString(), score: score.toString(), txHash: hash }, "advanced case to router");
+  } catch (err) {
+    log.warn(
+      { err, caseId: ctx.caseId.toString(), score: score.toString() },
+      "advanceToRouter reverted; case left in Scored state",
+    );
+  }
+}
+
+/* ----------------------------- Helpers --------------------------------- */
+
+function rethrowDecoded(err: unknown): never {
+  if (err instanceof BaseError) {
+    const cause = err.walk((e) => e instanceof ContractFunctionRevertedError);
+    if (cause instanceof ContractFunctionRevertedError) {
+      throw cause;
+    }
+  }
+  throw err;
+}
+
+async function extractCaseId(
+  client: PublicClient,
+  hash: Hash,
+): Promise<bigint | null> {
+  const receipt = await client.waitForTransactionReceipt({ hash });
+  for (const raw of receipt.logs) {
+    const log = raw as Log;
+    try {
+      const decoded = decodeEventLog({
+        abi: coordinatorAbi,
+        data: log.data,
+        topics: log.topics,
+        eventName: "PositionFlagged",
+      });
+      const args = decoded.args as unknown as { caseId?: bigint };
+      if (args.caseId !== undefined) return args.caseId;
+    } catch {
+      // Not the event we care about, keep scanning.
+    }
+  }
+  return null;
 }
