@@ -50,7 +50,12 @@ export type ConnectionState = "connecting" | "connected" | "reconnecting" | "err
 
 const BOOTSTRAP_CHUNK = 1_000n;
 const DEFAULT_BUFFER = 200;
-const DEFAULT_BOOTSTRAP_CHUNKS = 4;
+// 30 × 1000 = ~30 000 blocks of history. At ~0.4 s/block on Shannon this
+// covers roughly three hours - long enough that a hard refresh after an
+// extended demo session still rehydrates every previous case's full
+// event arc. Windows fire in parallel under a concurrency cap below so
+// total wall-clock time stays in single-digit seconds.
+const DEFAULT_BOOTSTRAP_CHUNKS = 30;
 
 /**
  * Live event aggregator for Sentinel contracts. On mount it back-fills the
@@ -94,7 +99,17 @@ export function useContractEvents(config: UseContractEventsConfig): {
     const bootstrap = async () => {
       try {
         const head = await httpClient.getBlockNumber();
-        const collected: SentinelLogEntry[] = [];
+        // Build the full (chunk × source × event) work list. Each entry
+        // is one self-contained eth_getLogs call that pushes events as
+        // soon as it resolves, so a single slow window cannot block the
+        // rest of the history from reaching the dashboard.
+        const windows: Array<{
+          fromBlock: bigint;
+          toBlock: bigint;
+          source: EventSource;
+          eventName: SentinelEventKind;
+          eventAbi: AbiEvent;
+        }> = [];
         for (let i = 0; i < bootstrapChunks; i += 1) {
           const toBlock = head - BigInt(i) * BOOTSTRAP_CHUNK;
           const fromCandidate = toBlock - BOOTSTRAP_CHUNK + 1n;
@@ -103,26 +118,45 @@ export function useContractEvents(config: UseContractEventsConfig): {
             for (const eventName of source.events) {
               const eventAbi = findEventAbi(source.abi, eventName);
               if (!eventAbi) continue;
-              try {
-                const logs = await httpClient.getContractEvents({
-                  address: source.address,
-                  abi: [eventAbi],
-                  eventName: eventAbi.name as string,
-                  fromBlock,
-                  toBlock,
-                });
-                for (const raw of logs) {
-                  const entry = toEntry(raw, eventName);
-                  if (entry) collected.push(entry);
-                }
-              } catch {
-                // Per-chunk failure is tolerated.
-              }
+              windows.push({ fromBlock, toBlock, source, eventName, eventAbi });
             }
           }
           if (fromBlock === 0n) break;
         }
-        if (!cancelled) push(collected);
+
+        // Bound concurrency so Shannon's public RPC does not rate-limit us
+        // when the dashboard subscribes to four contracts at once.
+        const CONCURRENCY = 8;
+        let cursor = 0;
+        const worker = async (): Promise<void> => {
+          while (!cancelled) {
+            const idx = cursor;
+            cursor += 1;
+            if (idx >= windows.length) return;
+            const w = windows[idx]!;
+            try {
+              const logs = await httpClient.getContractEvents({
+                address: w.source.address,
+                abi: [w.eventAbi],
+                eventName: w.eventAbi.name as string,
+                fromBlock: w.fromBlock,
+                toBlock: w.toBlock,
+              });
+              if (cancelled) return;
+              const entries: SentinelLogEntry[] = [];
+              for (const raw of logs) {
+                const entry = toEntry(raw, w.eventName);
+                if (entry) entries.push(entry);
+              }
+              if (entries.length > 0) push(entries);
+            } catch {
+              // Per-window failure tolerated; next iteration continues.
+            }
+          }
+        };
+        await Promise.all(
+          Array.from({ length: Math.min(CONCURRENCY, windows.length) }, () => worker()),
+        );
       } catch {
         // Bootstrap failure does not block the WSS subscription.
       }
