@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    background: #0a0a0a;
+    color: #f0f0f0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: #0a0a0a;
+    color: #f0f0f0;
+    font-family: var(--font-space-grotesk), system-ui, sans-serif;
+    overscroll-behavior-y: none;
+  }
+
+  ::selection {
+    background: rgba(0, 255, 136, 0.25);
+    color: #f0f0f0;
+  }
+
+  *:focus-visible {
+    outline: 2px solid #00ff88;
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .font-mono {
+    font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+    font-feature-settings: "zero" 1, "calt" 1;
+  }
+
+  .hairline {
+    box-shadow: inset 0 0 0 1px rgba(240, 240, 240, 0.08);
+  }
+
+  .hairline-primary {
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 136, 0.32);
+  }
+
+  /* Respect prefers-reduced-motion across animated primitives. */
+  @media (prefers-reduced-motion: reduce) {
+    .respects-motion-pref {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
