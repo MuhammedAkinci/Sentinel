@@ -8,8 +8,10 @@ npm-debug.log*
 dist/
 build/
 .next/
+next-env.d.ts.bak
 out/
 coverage/
+.turbo/
 
 # Foundry
 contracts/out/
