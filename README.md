@@ -5,11 +5,24 @@ agents (validator-consensus inference) and off-chain runtime processes,
 coordinated on-chain through a registry, reputation, and payment-splitting
 contract layer.
 
+## Live
+
+| Surface     | URL                                                 |
+| ----------- | --------------------------------------------------- |
+| Landing     | <https://sentinel-sigma-two.vercel.app/>            |
+| Dashboard   | <https://sentinel-sigma-two.vercel.app/dashboard>   |
+| Docs        | <https://sentinel-sigma-two.vercel.app/docs>        |
+| Pitch deck  | <https://sentinel-sigma-two.vercel.app/pitch>       |
+
+All four routes are served from the production Vercel deployment of
+`packages/frontend`. Contracts referenced by the dashboard live on the
+Shannon testnet (chain id 50312); the address book is below.
+
 ---
 
 ## Architecture
 
-Five logical agents, two execution surfaces.
+Four logical agents, two execution surfaces.
 
 | Agent     | Where it lives                          | Why                                               |
 | --------- | --------------------------------------- | ------------------------------------------------- |
