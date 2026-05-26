@@ -26,10 +26,15 @@ export interface SentinelLogEntry {
   id: string;
   kind: SentinelEventKind;
   blockNumber: bigint;
-  txHash: `0x${string}`;
+  /** Undefined for synthetic entries derived from on-chain storage
+   *  rather than emitted logs. Consumers must render a fallback. */
+  txHash?: `0x${string}`;
   logIndex: number;
   args: Record<string, unknown>;
   emittedBy: `0x${string}`;
+  /** True when the entry was synthesised from contract storage rather
+   *  than fetched from an emitted event log. */
+  synthetic?: boolean;
 }
 
 export interface EventSource {
@@ -52,7 +57,7 @@ const BOOTSTRAP_CHUNK = 1_000n;
 const DEFAULT_BUFFER = 200;
 // 30 × 1000 = ~30 000 blocks of history. At ~0.4 s/block on Shannon this
 // covers roughly three hours - long enough that a hard refresh after an
-// extended demo session still rehydrates every previous case's full
+// extended session still rehydrates every previous case's full
 // event arc. Windows fire in parallel under a concurrency cap below so
 // total wall-clock time stays in single-digit seconds.
 const DEFAULT_BOOTSTRAP_CHUNKS = 30;
