@@ -1,12 +1,18 @@
+import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 
 import { Logo } from "~/components/shared/Logo";
 
-const LINKS: ReadonlyArray<{ label: string; href: string }> = [
-  { label: "GitHub", href: "https://github.com/MuhammedAkinci/Sentinel" },
-  { label: "Somnia Docs", href: "https://docs.somnia.network" },
-  { label: "Encode Agentathon", href: "https://www.encodeclub.com/programmes/agentathon" },
-  { label: "Shannon Explorer", href: "https://shannon-explorer.somnia.network" },
+interface NavLink {
+  label: string;
+  href: string;
+  external?: boolean;
+}
+
+const LINKS: ReadonlyArray<NavLink> = [
+  { label: "Docs", href: "/docs" },
+  { label: "Dashboard", href: "/dashboard" },
+  { label: "Somnia Docs", href: "https://docs.somnia.network", external: true },
 ];
 
 export function Footer() {
@@ -23,18 +29,28 @@ export function Footer() {
           </div>
         </div>
         <nav className="flex flex-wrap items-center gap-x-7 gap-y-3 text-sm">
-          {LINKS.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-foreground/70 transition-colors hover:text-foreground"
-            >
-              {link.label}
-              <ArrowUpRight size={12} />
-            </a>
-          ))}
+          {LINKS.map((link) =>
+            link.external ? (
+              <a
+                key={link.href}
+                href={link.href}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-foreground/70 transition-colors hover:text-foreground"
+              >
+                {link.label}
+                <ArrowUpRight size={12} />
+              </a>
+            ) : (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="inline-flex items-center gap-1 text-foreground/70 transition-colors hover:text-foreground"
+              >
+                {link.label}
+              </Link>
+            ),
+          )}
         </nav>
       </div>
     </footer>

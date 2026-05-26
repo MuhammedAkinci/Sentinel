@@ -72,8 +72,8 @@ export function Hero() {
 
           <p className="mt-10 max-w-xl text-base leading-relaxed text-foreground/80 sm:text-lg">
             Autonomous liquidation network on Somnia&rsquo;s Agentic L1. Watcher,
-            Scorer, Router, Executor and Splitter - all on-chain, settled at
-            sub-second validator consensus latency.
+            Scorer, Router and Executor - four agents, two execution surfaces,
+            settled at sub-second validator consensus latency.
           </p>
 
           <div className="mt-10 flex items-center gap-4">

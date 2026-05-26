@@ -44,7 +44,7 @@ export function Metrics() {
 
   const items: Array<{ value: string; label: string }> = [
     { value: STATIC_LATENCY_LABEL, label: "validator consensus latency" },
-    { value: data?.totalCases ?? "-", label: "cases coordinated on Shannon" },
+    { value: data?.totalCases ?? "-", label: "cases coordinated on chain" },
     {
       value: data?.depositSomi ? `${data.depositSomi.toFixed(2)} STT` : "-",
       label: "per-request platform deposit",

@@ -14,7 +14,7 @@ const CONTRACTS: ReadonlyArray<{ name: string; address: string; description: str
   { name: "Coordinator", address: addresses.coordinator, description: "On-chain orchestrator" },
   { name: "Splitter", address: addresses.splitter, description: "60 / 30 / 10 pull payment splitter" },
   { name: "LendingPool", address: addresses.pool, description: "Interest-free multi-reserve pool" },
-  { name: "AutoProtectionVault", address: addresses.vault, description: "Consumer dApp demo" },
+  { name: "AutoProtectionVault", address: addresses.vault, description: "Consumer-side dApp integration" },
 ];
 
 export function Architecture() {
@@ -23,11 +23,13 @@ export function Architecture() {
       <div className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-16 px-6 py-24 sm:px-10 lg:grid-cols-2">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-primary/80">Agents</p>
-          <h3 className="mt-4 text-3xl font-semibold tracking-tight">Five agents, two surfaces.</h3>
+          <h3 className="mt-4 text-3xl font-semibold tracking-tight">Four agents, two surfaces.</h3>
           <p className="mt-4 max-w-md text-foreground/70">
-            Watcher and Executor live in TypeScript with WSS subscriptions; Scorer
-            and Router are Somnia native agents invoked through validator
-            consensus; Splitter is plain Solidity.
+            Watcher and Executor live as TypeScript binaries with WSS
+            subscriptions - sub-second event detection where latency wins
+            liquidations. Scorer and Router run as Somnia native agents
+            invoked through validator consensus - verifiable decisions where
+            integrity wins trust.
           </p>
 
           <ul className="mt-10 divide-y divide-border border-y border-border">
@@ -45,11 +47,12 @@ export function Architecture() {
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.32em] text-primary/80">Contracts</p>
           <h3 className="mt-4 text-3xl font-semibold tracking-tight">
-            Deployed on Shannon testnet.
+            Deployed on the Somnia testnet.
           </h3>
           <p className="mt-4 max-w-md text-foreground/70">
-            All addresses are verifiable on Shannon Explorer. The Coordinator forwards
-            agent payloads to the Somnia platform; everything else runs locally.
+            Every address below is a public on-chain contract. The Coordinator
+            forwards agent payloads to the Somnia platform; the rest of the
+            protocol runs as plain Solidity.
           </p>
 
           <ul className="mt-10 divide-y divide-border border-y border-border">

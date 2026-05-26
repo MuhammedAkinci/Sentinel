@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
 
 import { Logo } from "./Logo";
 
@@ -17,22 +16,12 @@ export function LandingNav() {
         <a href="#architecture" className="text-foreground/80 transition-colors hover:text-foreground">
           Architecture
         </a>
-        <a
-          href="https://github.com/MuhammedAkinci/Sentinel/tree/main/docs"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-foreground/80 transition-colors hover:text-foreground"
+        <Link
+          href="/docs"
+          className="text-foreground/80 transition-colors hover:text-foreground"
         >
-          Docs <ArrowUpRight size={12} />
-        </a>
-        <a
-          href="https://github.com/MuhammedAkinci/Sentinel"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-foreground/80 transition-colors hover:text-foreground"
-        >
-          GitHub <ArrowUpRight size={12} />
-        </a>
+          Docs
+        </Link>
       </div>
 
       <Link
