@@ -3,11 +3,12 @@
 import { ArrowUpRight } from "lucide-react";
 
 import { useRecentLiquidations } from "~/hooks/useRecentLiquidations";
+import { addresses } from "~/lib/env";
 import { explorer, formatAmount, formatTimeAgo, shortAddress } from "~/lib/utils";
 import { Panel, EmptyState } from "./ActivePositions";
 
-export function RecentLiquidations() {
-  const { cases, loading } = useRecentLiquidations(10);
+export function RecentLiquidations({ refreshTick = 0 }: { refreshTick?: number }) {
+  const { cases, loading } = useRecentLiquidations(10, refreshTick);
 
   return (
     <Panel
@@ -28,7 +29,7 @@ export function RecentLiquidations() {
                 <th className="px-4 py-3 font-medium text-right">Debt covered</th>
                 <th className="px-4 py-3 font-medium text-right">Collateral seized</th>
                 <th className="px-4 py-3 font-medium text-right">Flagged</th>
-                <th className="px-4 py-3 font-medium text-right">Explorer</th>
+                <th className="px-4 py-3 font-medium text-right">Coordinator</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -58,12 +59,12 @@ export function RecentLiquidations() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <a
-                      href={explorer.address(c.user)}
+                      href={explorer.address(addresses.coordinator)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-primary"
                     >
-                      view <ArrowUpRight size={10} />
+                      open <ArrowUpRight size={10} />
                     </a>
                   </td>
                 </tr>

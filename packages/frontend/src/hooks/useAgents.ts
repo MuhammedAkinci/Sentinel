@@ -23,7 +23,17 @@ export interface RegisteredAgent {
 
 const ROLE_NAMES: AgentRole[] = ["None", "Watcher", "Scorer", "Router", "Executor"];
 
-export function useAgents(): {
+/**
+ * Reads the AgentRegistry roster plus each agent's Reputation
+ * performance counters.
+ *
+ * @param refreshTick An external trigger (typically a count of recent
+ *   Reputation events the dashboard has observed). When this value
+ *   changes the hook re-fetches every agent's score so the table
+ *   updates within the same tick a SuccessRecorded / FailureRecorded
+ *   event lands.
+ */
+export function useAgents(refreshTick: number = 0): {
   agents: ReadonlyArray<RegisteredAgent>;
   loading: boolean;
 } {
@@ -99,7 +109,7 @@ export function useAgents(): {
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, refreshTick]);
 
   return { agents, loading };
 }

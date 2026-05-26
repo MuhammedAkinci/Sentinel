@@ -46,8 +46,14 @@ const STATUS_EXECUTED = 4;
  * scanning event logs. Shannon's RPC caps eth_getLogs at 1000 blocks so
  * a deep historical scan is impractical; iterating `getCase(id)` from
  * `nextCaseId - 1` downward is unaffected by that limit.
+ *
+ * @param limit Maximum number of executed cases to surface, newest first.
+ * @param refreshTick External trigger fired by the dashboard whenever an
+ *   `Executed` event lands over WSS. When this value changes the hook
+ *   re-reads the ledger so a fresh case appears within the same tick
+ *   instead of waiting for the 15-second polling cycle.
  */
-export function useRecentLiquidations(limit = 10): UseRecentLiquidationsResult {
+export function useRecentLiquidations(limit = 10, refreshTick = 0): UseRecentLiquidationsResult {
   const client = usePublicClient();
   const [cases, setCases] = useState<ReadonlyArray<ExecutedLiquidation>>([]);
   const [loading, setLoading] = useState(true);
@@ -107,7 +113,7 @@ export function useRecentLiquidations(limit = 10): UseRecentLiquidationsResult {
     return () => {
       cancelled = true;
     };
-  }, [client, tick, limit]);
+  }, [client, tick, limit, refreshTick]);
 
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 15_000);

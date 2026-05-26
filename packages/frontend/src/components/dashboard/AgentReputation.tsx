@@ -6,8 +6,8 @@ import { useAgents } from "~/hooks/useAgents";
 import { explorer, shortAddress } from "~/lib/utils";
 import { Panel, EmptyState } from "./ActivePositions";
 
-export function AgentReputation() {
-  const { agents, loading } = useAgents();
+export function AgentReputation({ refreshTick = 0 }: { refreshTick?: number }) {
+  const { agents, loading } = useAgents(refreshTick);
 
   const maxScore = agents.reduce((acc, a) => (a.reputationScore > acc ? a.reputationScore : acc), 0n);
 
