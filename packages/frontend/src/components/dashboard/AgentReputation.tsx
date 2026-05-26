@@ -3,6 +3,7 @@
 import { ArrowUpRight } from "lucide-react";
 
 import { useAgents } from "~/hooks/useAgents";
+import { addresses } from "~/lib/env";
 import { explorer, shortAddress } from "~/lib/utils";
 import { Panel, EmptyState } from "./ActivePositions";
 
@@ -40,19 +41,31 @@ export function AgentReputation({ refreshTick = 0 }: { refreshTick?: number }) {
                   maxScore === 0n
                     ? 0
                     : Number((agent.reputationScore * 100n) / (maxScore === 0n ? 1n : maxScore));
+                const isVaultOperator =
+                  agent.operator.toLowerCase() === addresses.vault.toLowerCase();
                 return (
                   <tr key={agent.id.toString()} className="hover:bg-muted/40">
                     <td className="px-4 py-3 font-mono">#{agent.id.toString()}</td>
                     <td className="px-4 py-3">{agent.role}</td>
                     <td className="px-4 py-3 font-mono text-xs">
-                      <a
-                        href={explorer.address(agent.operator)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 hover:text-primary"
-                      >
-                        {shortAddress(agent.operator)} <ArrowUpRight size={10} />
-                      </a>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={explorer.address(agent.operator)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 hover:text-primary"
+                        >
+                          {shortAddress(agent.operator)} <ArrowUpRight size={10} />
+                        </a>
+                        {isVaultOperator ? (
+                          <span
+                            title="AutoProtectionVault auto-registers itself as a Watcher in its constructor; this agent only earns reputation when a third-party calls vault.requestSentinelProtection()."
+                            className="inline-flex items-center border border-foreground/20 bg-muted/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground"
+                          >
+                            vault auto
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right font-mono">{agent.successes}</td>
                     <td className="px-4 py-3 text-right font-mono">{agent.failures}</td>

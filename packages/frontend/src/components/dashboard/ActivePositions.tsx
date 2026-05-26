@@ -6,6 +6,7 @@ import type { Address } from "viem";
 import { useAccount } from "wagmi";
 
 import { useActivePositions, type Position } from "~/hooks/useActivePositions";
+import { addresses } from "~/lib/env";
 import { formatAmount, formatHealthFactor, shortAddress, explorer } from "~/lib/utils";
 
 function hfColor(hf18: bigint): string {
@@ -46,6 +47,16 @@ export function ActivePositions({ extraUsers }: { extraUsers?: ReadonlyArray<Add
     <Panel
       title="Active Positions"
       subtitle="Live readings against LendingPool. Sorted by lowest health factor."
+      action={
+        <a
+          href={explorer.address(addresses.pool)}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground transition-colors hover:text-primary"
+        >
+          View pool <ArrowUpRight size={10} />
+        </a>
+      }
     >
       {loading && positions.length === 0 ? (
         <EmptyState label="Loading positions…" />
