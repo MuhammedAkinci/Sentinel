@@ -33,3 +33,10 @@ contracts/lib/
 
 # OS
 Thumbs.db
+
+# Local working artifacts (not part of the published codebase).
+# packages/frontend/public/demo.mp4 is the canonical, deployable copy;
+# the raw screen recording at the repo root and any locally-generated
+# pitch PDF stay out of git.
+/*.mp4
+/sentinel-pitch.pdf
