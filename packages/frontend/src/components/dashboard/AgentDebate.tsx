@@ -110,9 +110,13 @@ export function AgentDebate({
                     ) : null}
                   </div>
                   <p className="mt-1 text-sm leading-relaxed text-foreground/90">{line.message}</p>
-                  {line.blockNumber ? (
+                  {line.txHash && line.blockNumber ? (
                     <div className="mt-1 font-mono text-[10px] text-muted-foreground">
                       block #{line.blockNumber.toString()}
+                    </div>
+                  ) : !line.txHash ? (
+                    <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
+                      case ledger
                     </div>
                   ) : null}
                 </div>

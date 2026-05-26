@@ -189,47 +189,73 @@ function useAction(): {
 function OpenPositionAction() {
   const { address } = useAccount();
   const { data: walletClient } = useWalletClient();
+  const publicClient = usePublicClient();
   const { state, result, run } = useAction();
 
   const onClick = () =>
     run(async () => {
       if (!walletClient || !address) throw new Error("Wallet not ready.");
+      if (!publicClient) throw new Error("Public client not ready.");
       const tenWeth = parseUnits("10", 18);
       const fifteenK = parseUnits("15000", 6);
       const healthyEthPrice = parseUnits("3000", 18);
 
+      // Every step here reads state set by the previous one: deposit
+      // requires the mint + approve to have landed, borrow requires
+      // the deposit to be reflected in the pool's collateral
+      // accounting. Submitting them back to back without waiting
+      // confuses the sequencer's nonce ordering and the chain's
+      // post-condition checks. Await every receipt.
+      const submitAndWait = async (
+        request: Parameters<typeof walletClient.writeContract>[0],
+      ): Promise<`0x${string}`> => {
+        const hash = await walletClient.writeContract(request);
+        await publicClient.waitForTransactionReceipt({ hash });
+        return hash;
+      };
+
       // The borrow only fits if ETH is at its healthy price. Reset the
       // oracle first so any prior price override does not block the new
       // position.
-      await walletClient.writeContract({
+      await submitAndWait({
         address: addresses.oracle,
         abi: priceOracleAdapterAbi,
         functionName: "setOverridePrice",
         args: [addresses.weth, healthyEthPrice],
+        account: address,
+        chain: walletClient.chain ?? null,
       });
-      await walletClient.writeContract({
+      await submitAndWait({
         address: addresses.weth,
         abi: mintableErc20Abi,
         functionName: "mint",
         args: [address, tenWeth],
+        account: address,
+        chain: walletClient.chain ?? null,
       });
-      await walletClient.writeContract({
+      await submitAndWait({
         address: addresses.weth,
         abi: mintableErc20Abi,
         functionName: "approve",
         args: [addresses.pool, tenWeth],
+        account: address,
+        chain: walletClient.chain ?? null,
       });
-      await walletClient.writeContract({
+      await submitAndWait({
         address: addresses.pool,
         abi: lendingPoolAbi,
         functionName: "deposit",
         args: [addresses.weth, tenWeth],
+        account: address,
+        chain: walletClient.chain ?? null,
       });
-      const borrowHash = await walletClient.writeContract({
+      const borrowHash = await submitAndWait({
         address: addresses.pool,
         abi: lendingPoolAbi,
         functionName: "borrow",
         args: [addresses.usdc, fifteenK],
+        account: address,
+        chain: walletClient.chain ?? null,
       });
       return borrowHash;
     });

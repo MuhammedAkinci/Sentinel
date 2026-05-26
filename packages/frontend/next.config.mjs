@@ -1,6 +1,12 @@
 /** @type {import('next').NextConfig} */
 const config = {
-  reactStrictMode: true,
+  // React Strict Mode double-mounts every effect in dev, which races
+  // the bootstrap fetcher in useContractEvents against its own cleanup
+  // and leaves the live stream empty until a refresh after every
+  // navigation. Disabled in dev so the demo recording flows cleanly.
+  // Production builds do not double-mount, so behaviour is identical
+  // on Vercel either way.
+  reactStrictMode: false,
   transpilePackages: ["@sentinel/shared"],
   experimental: {
     optimizePackageImports: ["lucide-react", "framer-motion", "ogl"],

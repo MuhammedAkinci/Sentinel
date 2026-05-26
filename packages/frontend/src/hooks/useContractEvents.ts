@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Abi, AbiEvent, Log, PublicClient } from "viem";
 
-import { createWssClient, httpClient } from "~/lib/viem";
+import { httpClient } from "~/lib/viem";
 
 export type SentinelEventKind =
   | "PositionFlagged"
@@ -142,8 +142,8 @@ export function useContractEvents(config: UseContractEventsConfig): {
             try {
               const logs = await httpClient.getContractEvents({
                 address: w.source.address,
-                abi: [w.eventAbi],
-                eventName: w.eventAbi.name as string,
+                abi: w.source.abi,
+                eventName: w.eventName,
                 fromBlock: w.fromBlock,
                 toBlock: w.toBlock,
               });
@@ -163,41 +163,72 @@ export function useContractEvents(config: UseContractEventsConfig): {
           Array.from({ length: Math.min(CONCURRENCY, windows.length) }, () => worker()),
         );
       } catch {
-        // Bootstrap failure does not block the WSS subscription.
+        // Bootstrap failure does not block live polling.
       }
     };
 
+    let pollingTimer: ReturnType<typeof setInterval> | null = null;
+    let lastSeenBlock: bigint | null = null;
+
     const subscribe = () => {
-      try {
-        client = createWssClient();
-        setStatus("connected");
-        backoffMs = 1_000;
+      // viem's watchContractEvent with poll:true did not pick up new
+      // logs reliably against Somnia's HTTP RPC during our testing -
+      // onLogs would never fire even when eth_getLogs against the same
+      // address returned the matching entries. We replace it with a
+      // direct polling loop that tracks the last block we have seen,
+      // queries every source for new events since that point, and
+      // pushes whatever lands. Same RPC, fewer abstractions in the
+      // way, deterministic behaviour.
+      setStatus("connected");
+      backoffMs = 1_000;
 
-        for (const source of configRef.current.sources) {
-          for (const eventName of source.events) {
-            const eventAbi = findEventAbi(source.abi, eventName);
-            if (!eventAbi) continue;
+      const poll = async (): Promise<void> => {
+        if (cancelled) return;
+        try {
+          const head = await httpClient.getBlockNumber();
+          const fromBlock = lastSeenBlock === null ? head : lastSeenBlock + 1n;
+          lastSeenBlock = head;
+          if (fromBlock > head) return;
 
-            const unwatch = client.watchContractEvent({
-              address: source.address,
-              abi: [eventAbi],
-              eventName: eventAbi.name as string,
-              onLogs: (logs) => {
+          for (const source of configRef.current.sources) {
+            for (const eventName of source.events) {
+              const eventAbi = findEventAbi(source.abi, eventName);
+              if (!eventAbi) continue;
+              try {
+                const logs = await httpClient.getContractEvents({
+                  address: source.address,
+                  abi: source.abi,
+                  eventName: eventName,
+                  fromBlock,
+                  toBlock: head,
+                });
+                if (logs.length === 0) continue;
                 const entries: SentinelLogEntry[] = [];
                 for (const raw of logs) {
                   const entry = toEntry(raw, eventName);
                   if (entry) entries.push(entry);
                 }
-                push(entries);
-              },
-              onError: () => scheduleReconnect(),
-            });
-            unwatchAll.push(unwatch);
+                if (entries.length > 0) push(entries);
+              } catch {
+                // Single source / event failure is tolerated; the next
+                // tick retries the full sweep.
+              }
+            }
           }
+        } catch {
+          // Head fetch failed; try again next tick.
         }
-      } catch {
-        scheduleReconnect();
-      }
+      };
+
+      // Kick off immediately so we start tracking, then keep polling.
+      void poll();
+      pollingTimer = setInterval(() => void poll(), 3_000);
+      unwatchAll.push(() => {
+        if (pollingTimer !== null) {
+          clearInterval(pollingTimer);
+          pollingTimer = null;
+        }
+      });
     };
 
     const scheduleReconnect = () => {

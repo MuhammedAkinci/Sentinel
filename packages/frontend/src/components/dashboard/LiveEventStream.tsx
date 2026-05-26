@@ -107,11 +107,35 @@ function describeArgs(kind: string, args: Record<string, unknown>): string {
   }
 }
 
-export function LiveEventStream({ events }: { events: ReadonlyArray<SentinelLogEntry> }) {
+export function LiveEventStream({
+  events,
+  onReset,
+  resetActive = false,
+}: {
+  events: ReadonlyArray<SentinelLogEntry>;
+  onReset?: () => void;
+  resetActive?: boolean;
+}) {
   return (
     <Panel
       title="Live Event Stream"
       subtitle="Coordinator, LendingPool, Reputation, Splitter - all over WSS."
+      action={
+        onReset ? (
+          <button
+            type="button"
+            onClick={() => onReset()}
+            className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground transition-colors hover:text-primary"
+            title={
+              resetActive
+                ? "Stream is filtered to events newer than the reset point. Click again to bump the mark forward."
+                : "Hide existing entries and show only events that land after now."
+            }
+          >
+            {resetActive ? "Reset · live" : "Reset stream"}
+          </button>
+        ) : null
+      }
     >
       {events.length === 0 ? (
         <EmptyState label="Awaiting events…" />

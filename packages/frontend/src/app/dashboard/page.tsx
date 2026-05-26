@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { Address } from "viem";
+
+import { httpClient } from "~/lib/viem";
 
 import { DashboardHeader } from "~/components/dashboard/DashboardHeader";
 import { ActivePositions } from "~/components/dashboard/ActivePositions";
@@ -102,12 +104,40 @@ export default function DashboardPage() {
       return !realCaseKeys.has(`${e.kind}:${caseId.toString()}`);
     });
     return [...events, ...filteredLedger].sort((a, b) => {
+      // Real WSS / HTTP-scan events always rank above ledger-synthesised
+      // ones. Synthetic entries use the case's createdAt timestamp as a
+      // pseudo blockNumber for stable ordering between themselves, but
+      // that value lives in a different numeric range than real chain
+      // blocks, so a naive numeric sort would interleave them wrongly.
+      const aSynthetic = a.synthetic ?? false;
+      const bSynthetic = b.synthetic ?? false;
+      if (aSynthetic !== bSynthetic) return aSynthetic ? 1 : -1;
       if (a.blockNumber === b.blockNumber) return b.logIndex - a.logIndex;
       return a.blockNumber > b.blockNumber ? -1 : 1;
     });
   }, [events, ledgerEvents]);
 
-  const activeRoles = useMemo(() => rolesFromEvents(mergedEvents), [mergedEvents]);
+  // High-water mark for the demo stream. Clicking "Reset stream" in
+  // the Live Event Stream header records the current head; from that
+  // point on we hide every synthetic ledger entry and every real event
+  // older than the mark. New events flowing in after the click stay
+  // visible. The on-chain state is unaffected - this is a viewer-side
+  // filter only.
+  const [streamFloor, setStreamFloor] = useState<bigint | null>(null);
+  const resetStream = useCallback(async () => {
+    const head = await httpClient.getBlockNumber();
+    setStreamFloor(head);
+  }, []);
+
+  const filteredStream = useMemo<ReadonlyArray<SentinelLogEntry>>(() => {
+    if (streamFloor === null) return mergedEvents;
+    return mergedEvents.filter((e) => {
+      if (e.synthetic) return false;
+      return e.blockNumber > streamFloor;
+    });
+  }, [mergedEvents, streamFloor]);
+
+  const activeRoles = useMemo(() => rolesFromEvents(filteredStream), [filteredStream]);
 
   // Feed every borrower seen over WSS straight into the active-positions
   // discovery set so a freshly opened position appears without waiting
@@ -132,13 +162,17 @@ export default function DashboardPage() {
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="flex flex-col gap-6 lg:col-span-8">
             <ActivePositions extraUsers={liveBorrowers} />
-            <AgentDebate events={mergedEvents} />
+            <AgentDebate events={filteredStream} />
             <AgentReputation refreshTick={reputationTick} />
             <RecentLiquidations refreshTick={executedTick} />
             <CaseConsole />
           </div>
           <aside className="lg:col-span-4">
-            <LiveEventStream events={mergedEvents} />
+            <LiveEventStream
+              events={filteredStream}
+              onReset={resetStream}
+              resetActive={streamFloor !== null}
+            />
           </aside>
         </div>
       </main>
