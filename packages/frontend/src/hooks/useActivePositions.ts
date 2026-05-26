@@ -83,7 +83,9 @@ export function useActivePositions(extraUsers: ReadonlyArray<Address> = []): Use
     };
   }, [client]);
 
-  // 2. Bootstrap the borrower set from recent Borrow logs.
+  // 2. Bootstrap the borrower set from recent Borrow logs. Repeats on
+  //    every poll tick so positions opened after the page mounted are
+  //    picked up within POLL_MS without requiring a manual refresh.
   useEffect(() => {
     if (!client) return;
     let cancelled = false;
@@ -94,13 +96,14 @@ export function useActivePositions(extraUsers: ReadonlyArray<Address> = []): Use
           setUsers((prev) => mergeSets(prev, discovered));
         }
       } catch {
-        // The hook degrades to WSS-only discovery if the scan fails.
+        // Tolerant; next tick retries. WSS Borrow events fed through
+        // `extraUsers` still surface new positions instantly.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, tick]);
 
   // 3. Periodically refresh balances + HF for every known borrower.
   useEffect(() => {

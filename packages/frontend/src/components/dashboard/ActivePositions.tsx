@@ -1,6 +1,9 @@
 "use client";
 
+import { useMemo } from "react";
 import { ArrowUpRight } from "lucide-react";
+import type { Address } from "viem";
+import { useAccount } from "wagmi";
 
 import { useActivePositions, type Position } from "~/hooks/useActivePositions";
 import { formatAmount, formatHealthFactor, shortAddress, explorer } from "~/lib/utils";
@@ -23,8 +26,21 @@ function statusLabel(hf18: bigint): string {
   return "Healthy";
 }
 
-export function ActivePositions() {
-  const { positions, loading } = useActivePositions();
+export function ActivePositions({ extraUsers }: { extraUsers?: ReadonlyArray<Address> }) {
+  const { address } = useAccount();
+
+  // Always feed the connected wallet into the discovery set so the
+  // viewer's own position appears even when their Borrow event sits
+  // outside the dashboard's 1000-block bootstrap window. loadUserPosition
+  // skips addresses with no debt and no collateral, so this is a no-op
+  // for non-borrowers.
+  const merged = useMemo<ReadonlyArray<Address>>(() => {
+    const set = new Set<Address>(extraUsers ?? []);
+    if (address) set.add(address);
+    return Array.from(set);
+  }, [address, extraUsers]);
+
+  const { positions, loading } = useActivePositions(merged);
 
   return (
     <Panel
