@@ -1,7 +1,20 @@
 import type { Address } from "viem";
+import { formatUnits } from "viem";
 
 import { AGENT_PERSONAS, type AgentRoleKey, shortUser, type SpokenLine } from "./agentPersonas";
 import type { SentinelLogEntry } from "~/hooks/useContractEvents";
+
+/** Drop trailing zeros / unused decimal precision so big-int amounts read
+ *  naturally in dialogue lines. e.g. 26_250_000_000 / 6dp → "26,250", and
+ *  21_201_923_076_923_076_923n / 18dp → "21.2019". */
+function formatAmount(raw: bigint, decimals: number, displayDecimals = 4): string {
+  const s = formatUnits(raw, decimals);
+  const [whole, frac = ""] = s.split(".");
+  const grouped = (whole ?? "0").replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (!frac || displayDecimals === 0) return grouped;
+  const trimmed = frac.slice(0, displayDecimals).replace(/0+$/, "");
+  return trimmed ? `${grouped}.${trimmed}` : grouped;
+}
 
 interface VoicedEvent {
   speaker: AgentRoleKey;
@@ -88,11 +101,12 @@ export function voiceForEvent(event: SentinelLogEntry): VoicedEvent[] {
       ];
     }
     case "Routed": {
-      const debt = (args.debtToCover as bigint | undefined)?.toString() ?? "?";
+      const debtRaw = args.debtToCover as bigint | undefined;
+      const debt = debtRaw !== undefined ? `${formatAmount(debtRaw, 6)} USDC` : "?";
       return [
         {
           speaker: "Router",
-          message: `Optimal cover for Case #${caseId ?? "?"}: ${debt} (debt asset base units). Anything more would punish the borrower's recovery.`,
+          message: `Optimal cover for Case #${caseId ?? "?"}: ${debt}. Anything more would punish the borrower's recovery.`,
         },
       ];
     }
@@ -107,8 +121,10 @@ export function voiceForEvent(event: SentinelLogEntry): VoicedEvent[] {
       ];
     }
     case "Executed": {
-      const debt = (args.debtCovered as bigint | undefined)?.toString() ?? "?";
-      const seized = (args.collateralSeized as bigint | undefined)?.toString() ?? "?";
+      const debtRaw = args.debtCovered as bigint | undefined;
+      const seizedRaw = args.collateralSeized as bigint | undefined;
+      const debt = debtRaw !== undefined ? `${formatAmount(debtRaw, 6)} USDC` : "?";
+      const seized = seizedRaw !== undefined ? `${formatAmount(seizedRaw, 18)} WETH` : "?";
       return [
         {
           speaker: "Executor",
@@ -173,10 +189,10 @@ export function linesFromEvents(events: ReadonlyArray<SentinelLogEntry>): Spoken
         speaker: voice.speaker,
         callSign: persona.callSign,
         message: voice.message,
-        txHash: event.txHash,
         blockNumber: event.blockNumber,
         capturedAt: Date.now(),
       };
+      if (event.txHash !== undefined) line.txHash = event.txHash;
       if (caseId !== undefined) line.caseId = caseId;
       out.push(line);
     });

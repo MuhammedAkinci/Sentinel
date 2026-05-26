@@ -3,7 +3,7 @@
 import { ArrowUpRight } from "lucide-react";
 
 import type { SentinelLogEntry } from "~/hooks/useContractEvents";
-import { explorer, shortAddress } from "~/lib/utils";
+import { explorer, formatAmount, shortAddress } from "~/lib/utils";
 import { Panel, EmptyState } from "./ActivePositions";
 
 const TAG_STYLES: Record<string, string> = {
@@ -44,12 +44,18 @@ function describeArgs(kind: string, args: Record<string, unknown>): string {
     case "Routed": {
       const caseId = args.caseId as bigint | undefined;
       const debtToCover = args.debtToCover as bigint | undefined;
-      return `Case #${caseId?.toString() ?? "?"} · debtToCover=${debtToCover?.toString() ?? "?"}`;
+      const debt =
+        debtToCover !== undefined ? `${formatAmount(debtToCover, 6)} USDC` : "?";
+      return `Case #${caseId?.toString() ?? "?"} · debtToCover=${debt}`;
     }
     case "Executed": {
       const caseId = args.caseId as bigint | undefined;
       const collateralSeized = args.collateralSeized as bigint | undefined;
-      return `Case #${caseId?.toString() ?? "?"} · seized=${collateralSeized?.toString() ?? "?"}`;
+      const seized =
+        collateralSeized !== undefined
+          ? `${formatAmount(collateralSeized, 18)} WETH`
+          : "?";
+      return `Case #${caseId?.toString() ?? "?"} · seized=${seized}`;
     }
     case "CaseCancelled": {
       const caseId = args.caseId as bigint | undefined;
@@ -61,8 +67,32 @@ function describeArgs(kind: string, args: Record<string, unknown>): string {
     }
     case "Borrow": {
       const user = args.user as `0x${string}` | undefined;
+      const asset = args.asset as `0x${string}` | undefined;
       const amount = args.amount as bigint | undefined;
-      return `${shortAddress(user ?? null)} · ${amount?.toString() ?? "?"}`;
+      // The pool's only borrowable reserve is USDC (6 decimals). Fall
+      // back to a raw render if the asset address does not match.
+      const amountStr = amount !== undefined ? formatAmount(amount, 6) : "?";
+      return `${shortAddress(user ?? null)} · borrow ${amountStr}${asset ? " " : ""}${asset ? "USDC" : ""}`;
+    }
+    case "Deposit":
+    case "Repay":
+    case "Withdraw": {
+      const user = args.user as `0x${string}` | undefined;
+      // Deposit / Withdraw use 18-dec WETH, Repay uses 6-dec USDC. The
+      // distinct labels in the per-row badge make the asset clear.
+      const amount = args.amount as bigint | undefined;
+      if (amount === undefined) return shortAddress(user ?? null);
+      const decimals = kind === "Repay" ? 6 : 18;
+      const symbol = kind === "Repay" ? "USDC" : "WETH";
+      return `${shortAddress(user ?? null)} · ${formatAmount(amount, decimals)} ${symbol}`;
+    }
+    case "Settled": {
+      const amount = args.amount as bigint | undefined;
+      // Splitter is asset-agnostic but the current pool only seizes
+      // WETH, so render against 18 decimals.
+      return amount !== undefined
+        ? `${formatAmount(amount, 18)} WETH`
+        : "—";
     }
     case "SuccessRecorded":
     case "FailureRecorded": {
@@ -101,21 +131,27 @@ export function LiveEventStream({ events }: { events: ReadonlyArray<SentinelLogE
                 >
                   {event.kind}
                 </span>
-                <a
-                  href={explorer.tx(event.txHash)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground hover:text-primary"
-                >
-                  {event.txHash.slice(0, 8)}…{event.txHash.slice(-6)}
-                  <ArrowUpRight size={10} />
-                </a>
+                {event.txHash ? (
+                  <a
+                    href={explorer.tx(event.txHash)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground hover:text-primary"
+                  >
+                    {event.txHash.slice(0, 8)}…{event.txHash.slice(-6)}
+                    <ArrowUpRight size={10} />
+                  </a>
+                ) : (
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
+                    ledger
+                  </span>
+                )}
               </div>
               <div className="mt-1 font-mono text-xs text-foreground/80">
                 {describeArgs(event.kind, event.args)}
               </div>
               <div className="mt-1 font-mono text-[10px] text-muted-foreground">
-                block #{event.blockNumber.toString()}
+                {event.synthetic ? "case ledger" : `block #${event.blockNumber.toString()}`}
               </div>
             </li>
           ))}
